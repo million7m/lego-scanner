@@ -125,9 +125,26 @@ const server = http.createServer(async (req, res) => {
       bl: process.env.BARCODELOOKUP_KEY || req.headers['x-bl-key'] || '',
     };
     let result = null;
-    try { result = await identify(code, keys); } catch (e) { result = null; }
+    try { result = await identify(code, keys); } catch (e) { console.error('identify error:', e); result = null; }
     res.writeHead(200);
-    return res.end(JSON.stringify({ result }));
+    return res.end(JSON.stringify({ result, debug: { boKey: !!keys.bo, rbKey: !!keys.rb, blKey: !!keys.bl } }));
+  }
+
+  if (u.pathname === '/api/debug') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.writeHead(200);
+    return res.end(JSON.stringify({
+      env: {
+        BRICKOWL_KEY: !!process.env.BRICKOWL_KEY,
+        REBRICKABLE_KEY: !!process.env.REBRICKABLE_KEY,
+        BARCODELOOKUP_KEY: !!process.env.BARCODELOOKUP_KEY,
+      },
+      canReach: {
+        brickowl: 'test by scanning',
+        barcodelookup: 'test by scanning',
+        upcitemdb: 'always tried',
+      },
+    }));
   }
 
   // static files
