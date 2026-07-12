@@ -6,6 +6,7 @@ const SHELL = [
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
+  './zxing-browser.min.js',
 ];
 
 self.addEventListener('install', e => {
