@@ -800,6 +800,15 @@ async function lookupBarcodeDirect(code) {
 }
 
 /* Generic barcode databases — fallback for anything BrickOwl doesn't list. */
+async function getUpcitemdbBackoff() {
+  const entry = await DB.get('settings', 'upcitemdbBackoffUntil');
+  return entry?.value || 0;
+}
+
+async function setUpcitemdbBackoff(until) {
+  await DB.put('settings', { key: 'upcitemdbBackoffUntil', value: until });
+}
+
 async function lookupGenericBarcode(code) {
   const blKey = (await DB.get('settings', 'blKey'))?.value;
   if (blKey) {
@@ -820,16 +829,25 @@ async function lookupGenericBarcode(code) {
       }
     } catch (e) {}
   }
-  try {
-    const r = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
-    if (r.ok) {
-      const d = await r.json();
-      const it = (d.items || [])[0];
-      if (it && it.title) {
-        return { name: it.title, price: it.highest_recorded_price ? String(it.highest_recorded_price) : '', source: 'UPCitemdb' };
+  const backoffUntil = await getUpcitemdbBackoff();
+  if (Date.now() < backoffUntil) {
+    console.log('Skipping client UPCitemdb lookup until', new Date(backoffUntil).toISOString());
+  } else {
+    try {
+      const r = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
+      if (r.status === 429) {
+        const until = Date.now() + 24 * 60 * 60 * 1000;
+        await setUpcitemdbBackoff(until);
+        console.log('Client UPCitemdb rate limit hit; backing off until', new Date(until).toISOString());
+      } else if (r.ok) {
+        const d = await r.json();
+        const it = (d.items || [])[0];
+        if (it && it.title) {
+          return { name: it.title, price: it.highest_recorded_price ? String(it.highest_recorded_price) : '', source: 'UPCitemdb' };
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
   try {
     const off = await lookupOpenFoodFacts(code);
     if (off) return off;

@@ -21,6 +21,8 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, 'files');
 const PORT = process.env.PORT || 8123;
+const UPCITEMDB_BACKOFF_MS = 24 * 60 * 60 * 1000;
+let upcitemdbBackoffUntil = 0;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -74,14 +76,26 @@ async function lookupBarcodeLookup(code, key) {
 }
 
 async function lookupUpcitemdb(code) {
+  if (Date.now() < upcitemdbBackoffUntil) {
+    console.log('Skipping UPCitemdb due to backoff until', new Date(upcitemdbBackoffUntil).toISOString());
+    return null;
+  }
   try {
     const url = `https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`;
     console.log('UPCitemdb URL:', url);
-    const d = await getJson(url);
-    if (!d) {
-      console.error('UPCitemdb returned null/empty (check getJson error above)');
+    const r = await fetch(url);
+    if (r.status === 429) {
+      upcitemdbBackoffUntil = Date.now() + UPCITEMDB_BACKOFF_MS;
+      const text = await r.text();
+      console.error('UPCitemdb rate limit hit; backing off until', new Date(upcitemdbBackoffUntil).toISOString(), text.slice(0, 200));
       return null;
     }
+    if (!r.ok) {
+      const text = await r.text();
+      console.error(`HTTP ${r.status} from api.upcitemdb.com:`, text.slice(0, 200));
+      return null;
+    }
+    const d = await r.json();
     console.log('UPCitemdb raw response:', JSON.stringify(d).slice(0, 300));
     const it = (d?.items || [])[0];
     if (it?.title) {
