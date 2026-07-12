@@ -116,6 +116,15 @@ async function lookupUpcitemdb(code) {
   }
 }
 
+function decodeHtmlEntities(text) {
+  return String(text)
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 async function lookupOpenFoodFacts(code) {
   try {
     const url = `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`;
@@ -136,6 +145,32 @@ async function lookupOpenFoodFacts(code) {
     return result;
   } catch (e) {
     console.error('OpenFoodFacts exception:', e.message);
+    return null;
+  }
+}
+
+async function lookupWebFallback(code) {
+  try {
+    const url = `https://www.barcodelookup.com/${encodeURIComponent(code)}`;
+    console.log('Web fallback URL:', url);
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BrickLedger/1.0)' }
+    });
+    if (!r.ok) {
+      console.error('Web fallback HTTP error:', r.status);
+      return null;
+    }
+    const html = await r.text();
+    const meta = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+    const title = meta ? meta[1] : (html.match(/<title>([^<]+)<\/title>/i) || [])[1];
+    if (!title) return null;
+    const name = decodeHtmlEntities(title).replace(/\s*[|\-–].*$/, '').trim();
+    if (!name) return null;
+    const result = { name, source: 'WebFallback' };
+    console.log('Web fallback found:', result);
+    return result;
+  } catch (e) {
+    console.error('Web fallback exception:', e.message);
     return null;
   }
 }
@@ -192,6 +227,14 @@ async function identify(code, keys) {
     console.log('OpenFoodFacts result:', offResult);
     if (offResult) return offResult;
   } catch (e) { console.error('OpenFoodFacts error:', e.message); }
+
+  // 6) Web fallback using barcode result page title
+  try {
+    console.log('Trying web fallback for:', code);
+    const webResult = await lookupWebFallback(code);
+    console.log('Web fallback result:', webResult);
+    if (webResult) return webResult;
+  } catch (e) { console.error('Web fallback error:', e.message); }
 
   return null;
 }
