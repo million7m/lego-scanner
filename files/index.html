@@ -758,7 +758,9 @@ async function lookupBarcodeOnline(code) {
     });
     if (r.ok) {
       const d = await r.json();       // proxy ran the full chain — trust its answer
-      return d.result || null;
+      if (d.result) return d.result;
+      // If the proxy did not identify it, still try direct fallbacks locally.
+      return lookupBarcodeDirect(code);
     }
   } catch (e) { /* no proxy reachable — fall through to direct calls */ }
   return lookupBarcodeDirect(code);
