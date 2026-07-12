@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="theme-color" content="#17130D" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Brick Ledger" />
+<title>Brick Ledger — Lego inventory scanner</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&family=Spline+Sans+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#17130D; --bg2:#1d1810;
+    --surface:#241D13; --surface2:#2E2617; --surface3:#3a3020;
+    --line:#3a3120; --line2:#4a3f2a;
+    --gold:#F2B838; --gold-deep:#c9962a; --gold-soft:#ffe19a;
+    --text:#F4EEE0; --muted:#a99e86; --faint:#786f5a;
+    --green:#5FB878; --red:#E0563F; --blue:#6ba7d6;
+    --r:16px; --r-sm:11px;
+    --shadow:0 10px 30px rgba(0,0,0,.45);
+    --safe-top:env(safe-area-inset-top,0px);
+    --safe-bot:env(safe-area-inset-bottom,0px);
+    --disp:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body:"Inter", system-ui, -apple-system, sans-serif;
+    --mono:"Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{
+    background:
+      radial-gradient(120% 60% at 50% -10%, #221b10 0%, var(--bg) 55%) fixed,
+      var(--bg);
+    color:var(--text); font-family:var(--body);
+    font-size:16px; line-height:1.4; overscroll-behavior-y:none;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit; color:inherit; cursor:pointer; border:none; background:none;}
+  input,select,textarea{font-family:inherit; font-size:16px; color:var(--text);}
+  ::placeholder{color:var(--faint);}
+  .mono{font-family:var(--mono); letter-spacing:-.01em;}
+
+  /* ---------- App shell ---------- */
+  #app{max-width:620px; margin:0 auto; min-height:100%; display:flex; flex-direction:column;
+       padding-bottom:calc(120px + var(--safe-bot));}
+
+  header{
+    position:sticky; top:0; z-index:20;
+    padding:calc(var(--safe-top) + 14px) 18px 12px;
+    background:linear-gradient(var(--bg) 60%, rgba(23,19,13,0));
+  }
+  .brand{display:flex; align-items:center; gap:11px;}
+  .studs{display:grid; grid-template-columns:repeat(2,1fr); gap:4px; width:34px; height:34px;
+    background:var(--gold); border-radius:8px; padding:6px;
+    box-shadow:inset 0 -3px 0 rgba(0,0,0,.22), 0 3px 8px rgba(242,184,56,.28);}
+  .studs i{background:var(--gold-deep); border-radius:50%; box-shadow:inset 0 1.5px 1px rgba(255,255,255,.35);}
+  .brand h1{font-family:var(--disp); font-weight:800; font-size:22px; letter-spacing:-.02em; margin:0;}
+  .brand .sub{font-size:11.5px; color:var(--muted); margin-top:1px; letter-spacing:.02em;}
+  .brand-right{margin-left:auto; display:flex; align-items:center; gap:8px;}
+  .pill{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+    padding:6px 10px; border-radius:999px; background:var(--surface); border:1px solid var(--line);}
+  .pill .dot{width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green);}
+  .pill.off .dot{background:var(--faint); box-shadow:none;}
+  .iconbtn{width:38px; height:38px; border-radius:11px; background:var(--surface); border:1px solid var(--line);
+    display:grid; place-items:center; color:var(--muted);}
+  .iconbtn:active{transform:scale(.94);}
+
+  /* ---------- Toolbar ---------- */
+  .toolbar{padding:4px 18px 10px; display:flex; gap:10px; align-items:center;}
+  .search{flex:1; display:flex; align-items:center; gap:9px; background:var(--surface);
+    border:1px solid var(--line); border-radius:13px; padding:0 12px; height:44px;}
+  .search:focus-within{border-color:var(--gold-deep);}
+  .search input{background:none; border:none; outline:none; width:100%; height:100%;}
+  .search svg{flex:none; color:var(--faint);}
+  .sortbtn{height:44px; padding:0 13px; border-radius:13px; background:var(--surface);
+    border:1px solid var(--line); color:var(--muted); font-weight:600; font-size:13px;
+    display:flex; align-items:center; gap:6px;}
+  .sortbtn:active{transform:scale(.96);}
+
+  .count-row{padding:2px 20px 12px; display:flex; justify-content:space-between; align-items:baseline;}
+  .count-row .k{font-family:var(--disp); font-weight:800; font-size:15px;}
+  .count-row .k b{color:var(--gold);}
+  .count-row .v{font-size:12px; color:var(--muted);}
+
+  /* ---------- List ---------- */
+  .list{padding:0 14px; display:flex; flex-direction:column; gap:10px;}
+  .card{background:linear-gradient(var(--surface),var(--bg2)); border:1px solid var(--line);
+    border-radius:var(--r); padding:12px; display:flex; gap:12px; align-items:center;
+    box-shadow:0 1px 0 rgba(255,255,255,.02) inset;}
+  .thumb{width:56px; height:56px; border-radius:12px; flex:none; background:var(--surface2);
+    display:grid; place-items:center; overflow:hidden; border:1px solid var(--line);
+    position:relative;}
+  .thumb img{width:100%; height:100%; object-fit:cover;}
+  .thumb .glyph{font-family:var(--disp); font-weight:800; font-size:20px; color:var(--gold-deep);}
+  .card .info{min-width:0; flex:1;}
+  .card .name{font-weight:600; font-size:15px; line-height:1.25; overflow:hidden;
+    text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;}
+  .card .meta{margin-top:3px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .tag{font-family:var(--mono); font-size:11px; color:var(--muted); background:var(--surface2);
+    border:1px solid var(--line); padding:2px 7px; border-radius:7px;}
+  .tag.set{color:var(--gold-soft);}
+  .card .barcode{font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:5px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+  /* qty stepper */
+  .qty{flex:none; display:flex; flex-direction:column; align-items:center; gap:5px;}
+  .stepper{display:flex; align-items:center; background:var(--surface2); border:1px solid var(--line2);
+    border-radius:11px; overflow:hidden;}
+  .stepper button{width:34px; height:34px; font-size:20px; font-weight:600; color:var(--gold-soft);
+    display:grid; place-items:center;}
+  .stepper button:active{background:var(--surface3);}
+  .stepper .n{min-width:38px; text-align:center; font-family:var(--mono); font-weight:600; font-size:16px;
+    border-left:1px solid var(--line); border-right:1px solid var(--line); height:34px; line-height:34px;}
+  .rowmenu{color:var(--faint); padding:4px; font-size:12px;}
+
+  /* ---------- Empty ---------- */
+  .empty{padding:40px 30px 10px; text-align:center;}
+  .empty .art{width:96px; height:96px; margin:0 auto 20px; border-radius:22px;
+    background:linear-gradient(160deg,var(--surface2),var(--bg2)); border:1px solid var(--line);
+    display:grid; place-items:center; position:relative;}
+  .empty .art .studs{width:52px;height:52px; grid-template-columns:repeat(2,1fr); gap:6px; padding:9px;}
+  .empty h2{font-family:var(--disp); font-weight:800; font-size:22px; margin:0 0 8px; letter-spacing:-.02em;}
+  .empty p{color:var(--muted); font-size:14.5px; margin:0 auto; max-width:34ch;}
+
+  /* ---------- Scan brick button ---------- */
+  .dock{position:fixed; left:0; right:0; bottom:0; z-index:30; pointer-events:none;
+    padding:0 0 calc(20px + var(--safe-bot)); display:flex; justify-content:center;
+    background:linear-gradient(rgba(23,19,13,0), var(--bg) 65%); padding-top:34px;}
+  .scan-brick{pointer-events:auto; position:relative; border:none; isolation:isolate;
+    background:linear-gradient(180deg,#ffe391 0%,#ffcf4e 20%,var(--gold) 60%,var(--gold-deep) 100%);
+    color:#3b2905; font-family:var(--disp); font-weight:800; font-size:18px; letter-spacing:-.01em;
+    padding:24px 36px 18px; border-radius:19px; display:flex; align-items:center; gap:11px;
+    box-shadow:
+      inset 0 2px 0 rgba(255,255,255,.7),
+      inset 0 -5px 7px rgba(120,80,12,.32),
+      0 7px 0 var(--gold-deep),
+      0 12px 0 #8f6c1a,
+      0 22px 32px rgba(0,0,0,.5),
+      0 0 42px rgba(242,184,56,.34);
+    transition:transform .09s ease, box-shadow .09s ease;}
+  /* row of raised studs across the top of the brick */
+  .scan-brick::before{content:""; position:absolute; top:9px; left:34px; right:34px; height:15px;
+    pointer-events:none; background-repeat:no-repeat; background-size:15px 15px;
+    background-position:0% 0, 33.33% 0, 66.66% 0, 100% 0;
+    background-image:
+      radial-gradient(circle at 42% 33%, #fff2cf 0 2.5px, #f7c94f 34%, #cd982d 57%, rgba(205,152,45,0) 60%),
+      radial-gradient(circle at 42% 33%, #fff2cf 0 2.5px, #f7c94f 34%, #cd982d 57%, rgba(205,152,45,0) 60%),
+      radial-gradient(circle at 42% 33%, #fff2cf 0 2.5px, #f7c94f 34%, #cd982d 57%, rgba(205,152,45,0) 60%),
+      radial-gradient(circle at 42% 33%, #fff2cf 0 2.5px, #f7c94f 34%, #cd982d 57%, rgba(205,152,45,0) 60%);
+    filter:drop-shadow(0 2px 1px rgba(110,72,8,.5));}
+  .scan-brick:active{transform:translateY(8px);
+    box-shadow:
+      inset 0 2px 0 rgba(255,255,255,.55),
+      inset 0 -3px 5px rgba(120,80,12,.3),
+      0 2px 0 var(--gold-deep),
+      0 4px 0 #8f6c1a,
+      0 7px 14px rgba(0,0,0,.5),
+      0 0 26px rgba(242,184,56,.25);}
+  .scan-brick svg{margin-top:1px; filter:drop-shadow(0 1px 0 rgba(255,255,255,.4));}
+
+  /* ---------- Sheets & modals ---------- */
+  .scrim{position:fixed; inset:0; background:rgba(8,6,3,.66); z-index:40; opacity:0; pointer-events:none;
+    transition:opacity .22s ease; backdrop-filter:blur(2px);}
+  .scrim.show{opacity:1; pointer-events:auto;}
+  .sheet{position:fixed; left:0; right:0; bottom:0; z-index:50; max-width:620px; margin:0 auto;
+    background:var(--bg2); border-top-left-radius:24px; border-top-right-radius:24px;
+    border:1px solid var(--line); border-bottom:none; box-shadow:var(--shadow);
+    transform:translateY(102%); transition:transform .28s cubic-bezier(.22,1,.36,1);
+    max-height:92vh; display:flex; flex-direction:column; padding-bottom:var(--safe-bot);}
+  .sheet.show{transform:translateY(0);}
+  .grip{width:42px; height:5px; border-radius:9px; background:var(--line2); margin:10px auto 4px;}
+  .sheet-head{display:flex; align-items:center; gap:10px; padding:6px 20px 12px;}
+  .sheet-head h3{font-family:var(--disp); font-weight:800; font-size:19px; margin:0; letter-spacing:-.02em;}
+  .sheet-head .x{margin-left:auto; width:34px; height:34px; border-radius:10px; background:var(--surface);
+    border:1px solid var(--line); color:var(--muted); display:grid; place-items:center;}
+  .sheet-body{overflow-y:auto; padding:0 20px 22px;}
+
+  /* form */
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12px; color:var(--muted); font-weight:600; margin-bottom:6px;
+    letter-spacing:.02em; text-transform:uppercase;}
+  .field input, .field textarea, .field select{width:100%; background:var(--surface);
+    border:1px solid var(--line); border-radius:12px; padding:13px 14px; outline:none;}
+  .field input:focus, .field textarea:focus{border-color:var(--gold-deep);}
+  .field .mono{font-family:var(--mono);}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .hint{font-size:12px; color:var(--faint); margin-top:6px;}
+  .qty-big{display:flex; align-items:center; justify-content:space-between; background:var(--surface);
+    border:1px solid var(--line); border-radius:14px; padding:8px 10px;}
+  .qty-big button{width:52px; height:52px; border-radius:12px; background:var(--surface2);
+    border:1px solid var(--line2); font-size:26px; font-weight:700; color:var(--gold-soft);}
+  .qty-big button:active{transform:scale(.93);}
+  .qty-big input{width:80px; text-align:center; background:none; border:none; outline:none;
+    font-family:var(--mono); font-weight:600; font-size:28px;}
+
+  .btn{width:100%; border-radius:14px; padding:15px; font-weight:700; font-size:16px;
+    font-family:var(--disp); letter-spacing:-.01em; display:flex; align-items:center;
+    justify-content:center; gap:8px;}
+  .btn.primary{background:linear-gradient(180deg,#ffd257,var(--gold-deep)); color:#2a1e05;
+    box-shadow:0 4px 0 #a67d1f;}
+  .btn.primary:active{transform:translateY(3px); box-shadow:0 1px 0 #a67d1f;}
+  .btn.ghost{background:var(--surface); border:1px solid var(--line); color:var(--text);}
+  .btn.ghost:active{background:var(--surface2);}
+  .btn.danger{background:transparent; border:1px solid rgba(224,86,63,.4); color:var(--red);}
+  .btn.small{font-size:13.5px; padding:11px; font-family:var(--body); font-weight:600;}
+  .btn-row{display:flex; gap:10px; margin-top:6px;}
+
+  .resolved{display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:12px;
+    background:rgba(95,184,120,.1); border:1px solid rgba(95,184,120,.28); margin-bottom:14px;
+    font-size:13px; color:#bfe6cb;}
+  .resolved.warn{background:rgba(242,184,56,.08); border-color:rgba(242,184,56,.28); color:var(--gold-soft);}
+
+  /* ---------- Scanner ---------- */
+  .cam-wrap{position:relative; width:100%; aspect-ratio:1/1; max-height:60vh; background:#000;
+    border-radius:16px; overflow:hidden; border:1px solid var(--line);}
+  .cam-wrap video{width:100%; height:100%; object-fit:cover;}
+  .reticle{position:absolute; inset:16% 12%; border-radius:14px; pointer-events:none;}
+  .reticle span{position:absolute; width:30px; height:30px; border:3px solid var(--gold);}
+  .reticle .tl{top:0;left:0; border-right:none; border-bottom:none; border-radius:12px 0 0 0;}
+  .reticle .tr{top:0;right:0; border-left:none; border-bottom:none; border-radius:0 12px 0 0;}
+  .reticle .bl{bottom:0;left:0; border-right:none; border-top:none; border-radius:0 0 0 12px;}
+  .reticle .br{bottom:0;right:0; border-left:none; border-top:none; border-radius:0 0 12px 0;}
+  .laser{position:absolute; left:12%; right:12%; height:2px; background:var(--gold);
+    box-shadow:0 0 12px 2px rgba(242,184,56,.7); top:50%; animation:scan 2.4s ease-in-out infinite;}
+  @keyframes scan{0%,100%{top:20%}50%{top:80%}}
+  .cam-msg{position:absolute; left:0; right:0; bottom:0; padding:12px; text-align:center;
+    font-size:13px; color:var(--gold-soft); background:linear-gradient(transparent,rgba(0,0,0,.7));}
+  .cam-fallback{padding:26px 16px; text-align:center; color:var(--muted); font-size:14px;}
+
+  /* settings rows */
+  .set-group{background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    overflow:hidden; margin-bottom:16px;}
+  .set-row{padding:14px 16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--line);}
+  .set-row:last-child{border-bottom:none;}
+  .set-row .t{flex:1; min-width:0;}
+  .set-row .t b{font-weight:600; font-size:14.5px;}
+  .set-row .t small{display:block; color:var(--muted); font-size:12px; margin-top:2px;}
+  .set-row .go{color:var(--faint);}
+  .set-row.tap:active{background:var(--surface2);}
+
+  /* toast */
+  .toast{position:fixed; left:50%; transform:translateX(-50%) translateY(30px); z-index:80;
+    bottom:calc(120px + var(--safe-bot)); background:var(--surface3); color:var(--text);
+    border:1px solid var(--line2); border-radius:12px; padding:12px 18px; font-size:14px; font-weight:500;
+    box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:all .25s ease; max-width:88%;
+    display:flex; align-items:center; gap:9px;}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  .toast.good{border-color:rgba(95,184,120,.5);} .toast.good .ico{color:var(--green);}
+  .toast.bad{border-color:rgba(224,86,63,.5);} .toast.bad .ico{color:var(--red);}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none !important; transition:none !important;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">
+      <div class="studs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div>
+        <h1>Brick Ledger</h1>
+        <div class="sub">Scan · count · keep — works offline</div>
+      </div>
+      <div class="brand-right">
+        <span class="pill" id="netPill"><span class="dot"></span><span id="netText">Online</span></span>
+          <span class="pill" id="boxPill" style="margin-left:8px"><span class="dot" style="background:var(--blue)"></span><span id="boxText">No box</span></span>
+        <button class="iconbtn" id="btnSettings" aria-label="Settings">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <label class="search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="search" type="search" placeholder="Search name, set #, or barcode" autocomplete="off" />
+    </label>
+    <button class="sortbtn" id="btnSort">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
+      <span id="sortLabel">Recent</span>
+    </button>
+  </div>
+
+  <div class="count-row">
+    <div class="k"><b id="statSets">0</b> sets · <b id="statPieces">0</b> total<span id="statValueWrap" style="display:none"> · ≈<b id="statValue" style="color:var(--green)"></b> value</span></div>
+    <div class="v" id="statShown"></div>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <div class="empty" id="empty" style="display:none">
+    <div class="art"><div class="studs" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
+    <h2>Your ledger is empty</h2>
+    <p>Tap the brick below to scan a set’s box barcode. Name it once and Brick Ledger remembers it forever — no signal needed.</p>
+  </div>
+</div>
+
+<div class="dock">
+  <button class="scan-brick" id="btnScan">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+    Scan a set
+  </button>
+</div>
+
+<!-- Scrim -->
+<div class="scrim" id="scrim"></div>
+
+<!-- Scan sheet -->
+<div class="sheet" id="scanSheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <h3>Scan barcode</h3>
+    <button class="x" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="cam-wrap" id="camWrap">
+      <video id="video" playsinline muted></video>
+      <div class="reticle"><span class="tl"></span><span class="tr"></span><span class="bl"></span><span class="br"></span></div>
+      <div class="laser"></div>
+      <div class="cam-msg" id="camMsg">Point at the barcode on the box</div>
+    </div>
+    <div id="camFallback" class="cam-fallback" style="display:none"></div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn ghost small" id="btnManualCode">Enter code by hand</button>
+      <button class="btn ghost small" id="btnFlip">Flip camera</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit / add sheet -->
+<div class="sheet" id="editSheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <h3 id="editTitle">Add set</h3>
+    <button class="x" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div id="resolvedBox"></div>
+    <div class="field">
+      <label>Set name</label>
+      <input id="fName" type="text" placeholder="e.g. Millennium Falcon" />
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Set number</label>
+        <input id="fSet" class="mono" type="text" inputmode="numeric" placeholder="75192" />
+      </div>
+      <div class="field">
+        <label>Theme</label>
+        <input id="fTheme" type="text" placeholder="Star Wars" />
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Box barcode</label>
+        <input id="fBarcode" class="mono" type="text" inputmode="numeric" placeholder="Scan or type the UPC/EAN" />
+      </div>
+      <div class="field">
+        <label>Value each <span style="text-transform:none;color:var(--faint)">(optional)</span></label>
+        <input id="fPrice" class="mono" type="text" inputmode="decimal" placeholder="129.99" />
+      </div>
+    </div>
+    <div class="field">
+      <label>Quantity owned</label>
+      <div class="qty-big">
+        <button id="qMinus" aria-label="Decrease">−</button>
+        <input id="fQty" class="mono" type="number" min="0" value="1" />
+        <button id="qPlus" aria-label="Increase">+</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Note <span style="text-transform:none;color:var(--faint)">(optional — condition, location…)</span></label>
+      <textarea id="fNote" rows="2" placeholder="Sealed, in bin 4"></textarea>
+    </div>
+    <button class="btn ghost small" id="btnLookup" style="margin-bottom:14px">
+      Look up details online (optional)
+    </button>
+    <button class="btn primary" id="btnSave">Save to ledger</button>
+    <button class="btn danger small" id="btnDelete" style="margin-top:10px; display:none">Remove from ledger</button>
+  </div>
+</div>
+
+<!-- Settings sheet -->
+<div class="sheet" id="settingsSheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <h3>Settings & backup</h3>
+    <button class="x" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="set-group">
+      <div class="set-row tap" id="setImportCatalog">
+        <div class="t"><b>Import Lego catalog</b><small id="catalogStatus">Adds set names, piece counts & images for offline autofill</small></div>
+        <span class="go">›</span>
+      </div>
+      <div class="set-row">
+        <div class="t"><b>BrickOwl API key</b><small>Auto‑identify — turns a scanned box barcode into a LEGO set</small></div>
+      </div>
+      <div style="padding:0 16px 12px"><input id="fBoKey" class="mono" type="text" aria-label="BrickOwl API key" placeholder="paste BrickOwl key" style="width:100%; background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:11px 12px;" /></div>
+      <div class="set-row">
+        <div class="t"><b>Rebrickable API key</b><small>Adds set image &amp; piece count, and the “look up details” button</small></div>
+      </div>
+      <div style="padding:0 16px 12px"><input id="fApiKey" class="mono" type="text" aria-label="Rebrickable API key" placeholder="paste Rebrickable key" style="width:100%; background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:11px 12px;" /></div>
+      <div class="set-row">
+        <div class="t"><b>Barcode Lookup key</b><small>Optional fallback for non‑LEGO or unlisted barcodes</small></div>
+      </div>
+      <div style="padding:0 16px 14px"><input id="fBlKey" class="mono" type="text" aria-label="Barcode Lookup API key" placeholder="paste Barcode Lookup key (optional)" style="width:100%; background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:11px 12px;" /></div>
+    </div>
+
+    <div class="set-group">
+      <div class="set-row tap" id="setExportJson"><div class="t"><b>Export backup (.json)</b><small>Everything, restorable later</small></div><span class="go">↓</span></div>
+      <div class="set-row tap" id="setExportCsv"><div class="t"><b>Export spreadsheet (.csv)</b><small>Open in Excel or Sheets</small></div><span class="go">↓</span></div>
+      <div class="set-row tap" id="setImportJson"><div class="t"><b>Restore from backup</b><small>Load a .json export</small></div><span class="go">↑</span></div>
+    </div>
+
+    <div class="set-group">
+      <div class="set-row tap" id="setInstall"><div class="t"><b>Install on home screen</b><small id="installHint">Use your browser’s “Add to Home Screen”</small></div><span class="go">＋</span></div>
+    </div>
+
+    <div class="set-group">
+      <div class="set-row tap" id="setWipe"><div class="t"><b style="color:var(--red)">Erase all data</b><small>Deletes your ledger from this device</small></div><span class="go">›</span></div>
+    </div>
+    <p class="hint" style="text-align:center; padding:4px 10px">Brick Ledger stores everything on your device. LEGO® is a trademark of the LEGO Group, which doesn’t sponsor or endorse this app.</p>
+  </div>
+</div>
+
+<!-- hidden file input -->
+<input type="file" id="filePick" accept=".csv,.json" style="display:none" />
+
+<div class="toast" id="toast"><span class="ico"></span><span id="toastText"></span></div>
+
+<script>
+/* ============================================================
+   Brick Ledger — offline-first Lego inventory
+   Data lives in IndexedDB. No account, no server required.
+   ============================================================ */
+
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+/* ---------- tiny IndexedDB wrapper ---------- */
+const DB = (() => {
+  let db;
+  const open = () => new Promise((res, rej) => {
+    const r = indexedDB.open('brickledger', 1);
+    r.onupgradeneeded = e => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('items')) {
+        const s = d.createObjectStore('items', { keyPath: 'id' });
+        s.createIndex('updatedAt', 'updatedAt');
+      }
+      if (!d.objectStoreNames.contains('memory')) d.createObjectStore('memory', { keyPath: 'barcode' });
+      if (!d.objectStoreNames.contains('catalog')) d.createObjectStore('catalog', { keyPath: 'setNum' });
+      if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings', { keyPath: 'key' });
+    };
+    r.onsuccess = () => { db = r.result; res(db); };
+    r.onerror = () => rej(r.error);
+  });
+  const tx = (store, mode) => db.transaction(store, mode).objectStore(store);
+  const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  return {
+    open,
+    getAll: store => req(tx(store, 'readonly').getAll()),
+    get: (store, key) => req(tx(store, 'readonly').get(key)),
+    put: (store, val) => req(tx(store, 'readwrite').put(val)),
+    del: (store, key) => req(tx(store, 'readwrite').delete(key)),
+    clear: store => req(tx(store, 'readwrite').clear()),
+    bulk: (store, arr) => new Promise((res, rej) => {
+      const t = db.transaction(store, 'readwrite'); const s = t.objectStore(store);
+      arr.forEach(v => s.put(v)); t.oncomplete = () => res(); t.onerror = () => rej(t.error);
+    }),
+    count: store => req(tx(store, 'readonly').count()),
+  };
+})();
+
+/* ---------- state ---------- */
+let items = [];
+let sortMode = 'recent';
+let editingId = null;
+let activeBox = null;
+const SORTS = ['recent', 'name', 'qty'];
+const SORT_LABELS = { recent: 'Recent', name: 'A–Z', qty: 'Quantity' };
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* ---------- toast ---------- */
+let toastT;
+function toast(msg, kind = '') {
+  const el = $('#toast'); const ico = el.querySelector('.ico');
+  ico.textContent = kind === 'good' ? '✓' : kind === 'bad' ? '!' : '';
+  $('#toastText').textContent = msg;
+  el.className = 'toast show ' + kind;
+  clearTimeout(toastT); toastT = setTimeout(() => el.className = 'toast ' + kind, 2200);
+}
+
+/* ---------- render ---------- */
+function priceNum(p) { return Number.parseFloat(String(p ?? '').replace(/[^0-9.]/g, '')) || 0; }
+function computeStats() {
+  const totalPieces = items.reduce((a, x) => a + (x.qty || 0), 0);
+  const totalValue = items.reduce((a, x) => a + priceNum(x.price) * (x.qty || 0), 0);
+  $('#statSets').textContent = items.length;
+  $('#statPieces').textContent = totalPieces;
+  if (totalValue > 0) {
+    $('#statValue').textContent = totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    $('#statValueWrap').style.display = '';
+  } else {
+    $('#statValueWrap').style.display = 'none';
+  }
+}
+
+function currentView() {
+  const q = $('#search').value.trim().toLowerCase();
+  let v = items.filter(x =>
+    !q ||
+    (x.name || '').toLowerCase().includes(q) ||
+    (x.setNum || '').toLowerCase().includes(q) ||
+    (x.barcode || '').toLowerCase().includes(q) ||
+    (x.theme || '').toLowerCase().includes(q)
+  );
+  if (sortMode === 'name') v.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  else if (sortMode === 'qty') v.sort((a, b) => (b.qty || 0) - (a.qty || 0));
+  else v.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return v;
+}
+
+function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function render() {
+  computeStats();
+  const view = currentView();
+  const list = $('#list');
+  $('#empty').style.display = items.length === 0 ? '' : 'none';
+  $('#statShown').textContent = items.length && view.length !== items.length ? `${view.length} shown` : '';
+
+  if (items.length && view.length === 0) {
+    list.innerHTML = `<div class="empty" style="padding:30px"><h2 style="font-size:18px">No matches</h2><p>Nothing here matches your search.</p></div>`;
+    return;
+  }
+
+  list.innerHTML = view.map(x => {
+    const glyph = (x.name || '?').trim().charAt(0).toUpperCase() || '?';
+    const thumb = x.imgUrl
+      ? `<img src="${esc(x.imgUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.parentNode.querySelector('.glyph').style.display='grid'"><span class="glyph" style="display:none">${esc(glyph)}</span>`
+      : `<span class="glyph">${esc(glyph)}</span>`;
+    return `<div class="card" data-id="${x.id}">
+      <div class="thumb">${thumb}</div>
+      <div class="info" data-edit="${x.id}">
+        <div class="name">${esc(x.name) || '<span style="color:var(--faint)">Unnamed set</span>'}</div>
+        <div class="meta">
+          ${x.setNum ? `<span class="tag set">#${esc(x.setNum)}</span>` : ''}
+          ${x.theme ? `<span class="tag">${esc(x.theme)}</span>` : ''}
+          ${x.numParts ? `<span class="tag">${x.numParts} pcs</span>` : ''}
+          ${x.boxId ? `<span class="tag">box:${esc(x.boxId)}</span>` : ''}
+          ${x.price ? `<span class="tag" style="color:#bfe6cb; border-color:rgba(95,184,120,.3)">${esc(String(x.price))}</span>` : ''}
+        </div>
+        ${x.barcode ? `<div class="barcode">${esc(x.barcode)}</div>` : ''}
+      </div>
+      <div class="qty">
+        <div class="stepper">
+          <button data-dec="${x.id}" aria-label="Decrease quantity">−</button>
+          <span class="n">${x.qty || 0}</span>
+          <button data-inc="${x.id}" aria-label="Increase quantity">+</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* quick qty change */
+async function bump(id, delta) {
+  const it = items.find(x => x.id === id); if (!it) return;
+  it.qty = Math.max(0, (it.qty || 0) + delta);
+  it.updatedAt = Date.now();
+  await DB.put('items', it);
+  render();
+}
+
+/* ---------- sheets ---------- */
+let openSheetEl = null;
+function openSheet(el) {
+  if (openSheetEl && openSheetEl !== el) openSheetEl.classList.remove('show');
+  $('#scrim').classList.add('show');
+  el.classList.add('show'); el.setAttribute('aria-hidden', 'false');
+  openSheetEl = el;
+}
+function closeSheets() {
+  $('#scrim').classList.remove('show');
+  $$('.sheet').forEach(s => { s.classList.remove('show'); s.setAttribute('aria-hidden', 'true'); });
+  openSheetEl = null;
+  stopCamera();
+}
+$('#scrim').addEventListener('click', closeSheets);
+$$('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
+
+/* ---------- edit / add form ---------- */
+function openEditor(item, resolvedNote) {
+  editingId = item && item.id ? item.id : null;
+  $('#editTitle').textContent = editingId ? 'Edit set' : 'Add set';
+  $('#fName').value = item?.name || '';
+  $('#fSet').value = item?.setNum || '';
+  $('#fTheme').value = item?.theme || '';
+  $('#fBarcode').value = item?.barcode || '';
+  $('#fPrice').value = item?.price || '';
+  $('#fQty').value = item?.qty ?? 1;
+  $('#fNote').value = item?.note || '';
+  $('#btnDelete').style.display = editingId ? '' : 'none';
+  const rb = $('#resolvedBox');
+  rb.innerHTML = resolvedNote
+    ? `<div class="resolved ${resolvedNote.warn ? 'warn' : ''}">${resolvedNote.icon || '✓'} ${resolvedNote.text}</div>` : '';
+  // stash image/parts on the form element
+  $('#editSheet').dataset.img = item?.imgUrl || '';
+  $('#editSheet').dataset.parts = item?.numParts || '';
+  openSheet($('#editSheet'));
+  if (!editingId && !item?.name) setTimeout(() => $('#fName').focus(), 320);
+}
+
+$('#qMinus').addEventListener('click', () => { const i = $('#fQty'); i.value = Math.max(0, (+i.value || 0) - 1); });
+$('#qPlus').addEventListener('click', () => { const i = $('#fQty'); i.value = (+i.value || 0) + 1; });
+
+$('#btnSave').addEventListener('click', save);
+async function save() {
+  const name = $('#fName').value.trim();
+  const setNum = $('#fSet').value.trim();
+  const barcode = $('#fBarcode').value.trim();
+  if (!name && !setNum && !barcode) { toast('Add a name, set # or barcode first', 'bad'); return; }
+  const now = Date.now();
+  let it = editingId ? items.find(x => x.id === editingId) : null;
+  if (!it) { it = { id: uid(), createdAt: now }; }
+  Object.assign(it, {
+    name, setNum, barcode,
+    theme: $('#fTheme').value.trim(),
+    price: $('#fPrice').value.trim(),
+    qty: Math.max(0, +$('#fQty').value || 0),
+    note: $('#fNote').value.trim(),
+    imgUrl: $('#editSheet').dataset.img || it.imgUrl || '',
+    numParts: +($('#editSheet').dataset.parts) || it.numParts || 0,
+    updatedAt: now,
+  });
+  // If an active box is set, associate this item with that box
+  if (activeBox) it.boxId = activeBox;
+  await DB.put('items', it);
+  if (!editingId) items.push(it);
+  // teach the barcode→set memory for instant future scans
+  if (barcode) {
+    await DB.put('memory', { barcode, name, setNum, theme: it.theme, imgUrl: it.imgUrl, numParts: it.numParts });
+  }
+  editingId = null;
+  render(); closeSheets();
+  toast('Saved to ledger', 'good');
+}
+
+$('#btnDelete').addEventListener('click', async () => {
+  if (!editingId) return;
+  await DB.del('items', editingId);
+  items = items.filter(x => x.id !== editingId);
+  editingId = null;
+  render(); closeSheets();
+  toast('Removed', 'good');
+});
+
+/* tap a row to edit */
+$('#list').addEventListener('click', e => {
+  const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]');
+  if (inc) return bump(inc.dataset.inc, +1);
+  if (dec) return bump(dec.dataset.dec, -1);
+  const ed = e.target.closest('[data-edit]');
+  if (ed) { const it = items.find(x => x.id === ed.dataset.edit); if (it) openEditor(it); }
+});
+
+/* ---------- barcode resolve ---------- */
+async function resolveBarcode(code) {
+  // 1. exact item already in ledger → jump to editing it
+  const existing = items.find(x => x.barcode === code);
+  if (existing) {
+    openEditor(existing, { text: `Already in your ledger — quantity ${existing.qty}. Adjust below.`, icon: '↺' });
+    return;
+  }
+  // 2. remembered from a past scan → prefill, ready to save
+  const mem = await DB.get('memory', code);
+  if (mem) {
+    openEditor({ ...mem, barcode: code, qty: 1 },
+      { text: `Recognised: ${mem.name || 'saved set'}. Set quantity and save.`, icon: '✓' });
+    return;
+  }
+  // 3. unknown → open the form now, then try to identify it online (best-effort)
+  openEditor({ barcode: code, qty: 1 }, navigator.onLine
+    ? { icon: '⟳', text: 'New barcode — searching online to identify it…' }
+    : { warn: true, icon: '＋', text: 'New barcode. Name it once — it’ll be recognised instantly next time.' });
+  if (!navigator.onLine) return;
+
+  const found = await lookupBarcodeOnline(code).catch(() => null);
+  // the user may have closed the sheet or scanned something else meanwhile
+  if (!$('#editSheet').classList.contains('show') || $('#fBarcode').value !== code) return;
+  if (found) {
+    if (found.name && !$('#fName').value) $('#fName').value = found.name;
+    if (found.setNum && !$('#fSet').value) $('#fSet').value = found.setNum;
+    if (found.theme && !$('#fTheme').value) $('#fTheme').value = found.theme;
+    if (found.price && !$('#fPrice').value) $('#fPrice').value = found.price;
+    if (found.note && !$('#fNote').value) $('#fNote').value = found.note;
+    if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
+    if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
+    setResolvedNote({ icon: '✓',
+      text: `Identified via ${found.source}${found.setNum ? ' · set ' + found.setNum : ''}. Check the details and save.` });
+  } else {
+    const boKey = (await DB.get('settings', 'boKey'))?.value;
+    setResolvedNote(boKey
+      ? { warn: true, icon: '＋', text: 'Couldn’t identify this barcode online. Name it once — it’ll be recognised instantly next time.' }
+      : { warn: true, icon: '＋', text: 'New barcode. Add a BrickOwl key in Settings to auto‑identify, or just name it once — it’s remembered either way.' });
+  }
+}
+
+function setResolvedNote(n) {
+  $('#resolvedBox').innerHTML = n
+    ? `<div class="resolved ${n.warn ? 'warn' : ''}">${n.icon || '✓'} ${esc(n.text)}</div>` : '';
+}
+
+/* Turn a set name like "LEGO Star Wars Millennium Falcon 75192" into "75192-1" */
+function deriveSetNum(name) {
+  const groups = String(name || '').match(/\d{3,7}/g);   // last number in the name
+  return groups && groups.length ? groups[groups.length - 1] + '-1' : '';
+}
+function cleanSetName(name) {
+  return String(name || '').replace(/^lego\s+/i, '').replace(/\s+\d{3,7}\s*$/, '').trim();
+}
+
+/* Look up a set on Rebrickable by set number (adds image + piece count) */
+async function rebrickableSet(setNum, key) {
+  const norm = setNum.includes('-') ? setNum : setNum + '-1';
+  try {
+    const r = await fetch(`https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(norm)}/`,
+      { headers: { Authorization: 'key ' + key } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return { name: d.name, numParts: d.num_parts, imgUrl: d.set_img_url, setNum: norm };
+  } catch (e) { return null; }
+}
+
+/* Identify a barcode. Prefer the same-origin proxy (server.js) — it runs the
+   whole chain server-side so there's no CORS and keys can stay off the client.
+   If no proxy is present (e.g. app opened as static files), fall back to
+   calling the APIs directly with the keys from Settings. */
+async function lookupBarcodeOnline(code) {
+  try {
+    const [bo, rb, bl] = await Promise.all([
+      DB.get('settings', 'boKey'), DB.get('settings', 'apiKey'), DB.get('settings', 'blKey'),
+    ]);
+    const r = await fetch('api/identify?code=' + encodeURIComponent(code), {
+      headers: {
+        'x-bo-key': bo?.value || '',
+        'x-rb-key': rb?.value || '',
+        'x-bl-key': bl?.value || '',
+      },
+    });
+    if (r.ok) {
+      const d = await r.json();       // proxy ran the full chain — trust its answer
+      return d.result || null;
+    }
+  } catch (e) { /* no proxy reachable — fall through to direct calls */ }
+  return lookupBarcodeDirect(code);
+}
+
+/* Best-effort barcode → set identification, ported from the old Android app.
+   BrickOwl resolves a box barcode to a set; Rebrickable (or the offline
+   catalog) enriches it with an image and piece count. Falls back to generic
+   barcode databases for non-LEGO / unlisted codes. All calls are wrapped so a
+   CORS/network failure simply drops back to the "name it once" flow. */
+async function lookupBarcodeDirect(code) {
+  const boKey = (await DB.get('settings', 'boKey'))?.value;
+  const rbKey = (await DB.get('settings', 'apiKey'))?.value;
+
+  if (boKey) {
+    try {
+      const r = await fetch(`https://api.brickowl.com/v1/catalog/search?key=${encodeURIComponent(boKey)}&query=${encodeURIComponent(code)}`);
+      if (r.ok) {
+        const d = await r.json();
+        const hit = (d.results || []).find(x => x.type === 'Set') || (d.results || [])[0];
+        if (hit && hit.name) {
+          const setNum = deriveSetNum(hit.name);
+          const out = { name: cleanSetName(hit.name), setNum, source: 'BrickOwl' };
+          if (setNum && rbKey) {
+            const rb = await rebrickableSet(setNum, rbKey);
+            if (rb) { out.name = out.name || rb.name; out.numParts = rb.numParts; out.imgUrl = rb.imgUrl; }
+          } else if (setNum) {
+            const cat = await DB.get('catalog', setNum);       // offline enrichment
+            if (cat) { out.numParts = cat.numParts; out.imgUrl = cat.imgUrl; }
+          }
+          return out;
+        }
+      }
+    } catch (e) { /* CORS/network — fall through to generic lookup */ }
+  }
+  return lookupGenericBarcode(code);
+}
+
+/* Generic barcode databases — fallback for anything BrickOwl doesn't list. */
+async function lookupGenericBarcode(code) {
+  const blKey = (await DB.get('settings', 'blKey'))?.value;
+  if (blKey) {
+    try {
+      const r = await fetch(`https://api.barcodelookup.com/v2/products?barcode=${encodeURIComponent(code)}&formatted=y&key=${encodeURIComponent(blKey)}`);
+      if (r.ok) {
+        const d = await r.json();
+        const p = (d.products || [])[0];
+        if (p) {
+          const st = (p.stores || [])[0];
+          return {
+            name: p.product_name || p.title || '',
+            note: p.description || '',
+            price: st && st.store_price ? (st.currency_symbol || '') + st.store_price : '',
+            source: 'Barcode Lookup',
+          };
+        }
+      }
+    } catch (e) {}
+  }
+  try {
+    const r = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
+    if (r.ok) {
+      const d = await r.json();
+      const it = (d.items || [])[0];
+      if (it && it.title) {
+        return { name: it.title, price: it.highest_recorded_price ? String(it.highest_recorded_price) : '', source: 'UPCitemdb' };
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+/* ---------- online lookup (optional, best-effort) ---------- */
+$('#btnLookup').addEventListener('click', async () => {
+  const setNum = $('#fSet').value.trim();
+  if (!setNum) { toast('Enter a set number to look up', 'bad'); return; }
+  const key = (await DB.get('settings', 'apiKey'))?.value;
+  if (!navigator.onLine) { toast('You’re offline — try when connected', 'bad'); return; }
+  const btn = $('#btnLookup'); const orig = btn.textContent; btn.textContent = 'Looking up…';
+  // try local catalog first (works offline too)
+  const norm = setNum.includes('-') ? setNum : setNum + '-1';
+  let cat = await DB.get('catalog', norm) || await DB.get('catalog', setNum);
+  if (cat) {
+    applyLookup(cat.name, cat.theme, cat.numParts, cat.imgUrl);
+    btn.textContent = orig; toast('Filled from catalog', 'good'); return;
+  }
+  if (!key) { btn.textContent = orig; toast('Add a Rebrickable key in Settings, or import the catalog', 'bad'); return; }
+  try {
+    const r = await fetch(`https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(norm)}/`, {
+      headers: { Authorization: 'key ' + key }
+    });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    applyLookup(d.name, '', d.num_parts, d.set_img_url);
+    toast('Details found', 'good');
+  } catch (err) {
+    toast('Lookup unavailable — you can type details in', 'bad');
+  } finally { btn.textContent = orig; }
+});
+function applyLookup(name, theme, parts, img) {
+  if (name && !$('#fName').value) $('#fName').value = name;
+  if (theme && !$('#fTheme').value) $('#fTheme').value = theme;
+  if (parts) $('#editSheet').dataset.parts = parts;
+  if (img) $('#editSheet').dataset.img = img;
+}
+
+/* ============================================================
+   Camera / barcode scanning
+   Native BarcodeDetector when available (fully offline),
+   ZXing as a fallback for other browsers.
+   ============================================================ */
+let stream = null, detector = null, rafId = null, zxingReader = null, facing = 'environment', scanning = false;
+
+async function startCamera() {
+  const wrap = $('#camWrap'), fb = $('#camFallback');
+  wrap.style.display = ''; fb.style.display = 'none';
+  if (!navigator.mediaDevices?.getUserMedia) return camFallback('This browser can’t open the camera. Enter the code by hand below.');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: false });
+  } catch (e) {
+    return camFallback('Camera access was blocked. Allow it in your browser, or enter the code by hand.');
+  }
+  const video = $('#video'); video.srcObject = stream; await video.play().catch(() => {});
+  scanning = true;
+  if ('BarcodeDetector' in window) {
+    try {
+      const fmts = await BarcodeDetector.getSupportedFormats();
+      const want = ['ean_13', 'upc_a', 'ean_8', 'upc_e', 'code_128', 'code_39'].filter(f => fmts.includes(f));
+      detector = new BarcodeDetector({ formats: want.length ? want : undefined });
+      loopNative(video);
+      return;
+    } catch (e) { /* fall through to zxing */ }
+  }
+  loadZxing(video);
+}
+
+function camFallback(msg) {
+  $('#camWrap').style.display = 'none';
+  const fb = $('#camFallback'); fb.style.display = ''; fb.textContent = msg;
+}
+
+async function loopNative(video) {
+  if (!scanning) return;
+  try {
+    const codes = await detector.detect(video);
+    if (codes && codes.length) return onDetected(codes[0].rawValue);
+  } catch (e) {}
+  rafId = requestAnimationFrame(() => loopNative(video));
+}
+
+function loadZxing(video) {
+  const go = () => {
+    try {
+      const { BrowserMultiFormatReader } = window.ZXingBrowser || {};
+      if (!BrowserMultiFormatReader) return camFallback('Scanner library couldn’t load. Enter the code by hand below.');
+      zxingReader = new BrowserMultiFormatReader();
+      zxingReader.decodeFromVideoElement(video, (result) => {
+        if (result && scanning) onDetected(result.getText());
+      });
+    } catch (e) { camFallback('Scanner couldn’t start. Enter the code by hand below.'); }
+  };
+  if (window.ZXingBrowser) return go();
+  $('#camMsg').textContent = 'Loading scanner…';
+  const s = document.createElement('script');
+  s.src = 'https://unpkg.com/@zxing/browser@0.1.5/umd/index.min.js';
+  s.onload = () => { $('#camMsg').textContent = 'Point at the barcode on the box'; go(); };
+  s.onerror = () => camFallback('Scanner needs internet the first time. Connect once, or enter the code by hand.');
+  document.head.appendChild(s);
+}
+
+let lastCode = '', lastTime = 0;
+function onDetected(code) {
+  code = (code || '').trim();
+  const now = Date.now();
+  if (!code || (code === lastCode && now - lastTime < 2500)) return;
+  lastCode = code; lastTime = now;
+  if (navigator.vibrate) navigator.vibrate(35);
+  stopCamera();
+  closeSheets();
+  resolveBarcode(code);
+}
+
+function stopCamera() {
+  scanning = false;
+  if (rafId) cancelAnimationFrame(rafId), rafId = null;
+  if (zxingReader) { try { zxingReader.reset(); } catch (e) {} zxingReader = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  detector = null;
+}
+
+$('#btnScan').addEventListener('click', () => { openSheet($('#scanSheet')); startCamera(); });
+$('#btnFlip').addEventListener('click', () => { facing = facing === 'environment' ? 'user' : 'environment'; stopCamera(); startCamera(); });
+$('#btnManualCode').addEventListener('click', () => {
+  const code = prompt('Enter the barcode digits:');
+  if (code && code.trim()) { stopCamera(); closeSheets(); resolveBarcode(code.trim()); }
+});
+
+/* ---------- sort / search ---------- */
+$('#btnSort').addEventListener('click', () => {
+  sortMode = SORTS[(SORTS.indexOf(sortMode) + 1) % SORTS.length];
+  $('#sortLabel').textContent = SORT_LABELS[sortMode];
+  render();
+});
+$('#search').addEventListener('input', render);
+
+/* ---------- settings ---------- */
+$('#btnSettings').addEventListener('click', async () => {
+  $('#fApiKey').value = (await DB.get('settings', 'apiKey'))?.value || '';
+  $('#fBoKey').value = (await DB.get('settings', 'boKey'))?.value || '';
+  $('#fBlKey').value = (await DB.get('settings', 'blKey'))?.value || '';
+  const c = await DB.count('catalog');
+  $('#catalogStatus').textContent = c ? `${c.toLocaleString()} sets imported — used for offline autofill` : 'Adds set names, piece counts & images for offline autofill';
+  openSheet($('#settingsSheet'));
+});
+$('#fApiKey').addEventListener('change', async e => {
+  await DB.put('settings', { key: 'apiKey', value: e.target.value.trim() });
+  toast('Rebrickable key saved', 'good');
+});
+$('#fBoKey').addEventListener('change', async e => {
+  await DB.put('settings', { key: 'boKey', value: e.target.value.trim() });
+  toast('BrickOwl key saved', 'good');
+});
+$('#fBlKey').addEventListener('change', async e => {
+  await DB.put('settings', { key: 'blKey', value: e.target.value.trim() });
+  toast('Barcode Lookup key saved', 'good');
+});
+
+/* catalog import (Rebrickable sets.csv) */
+let pickMode = null;
+$('#setImportCatalog').addEventListener('click', () => { pickMode = 'catalog'; $('#filePick').accept = '.csv'; $('#filePick').click(); });
+$('#setImportJson').addEventListener('click', () => { pickMode = 'restore'; $('#filePick').accept = '.json'; $('#filePick').click(); });
+$('#filePick').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const text = await f.text(); e.target.value = '';
+  if (pickMode === 'catalog') await importCatalog(text);
+  else if (pickMode === 'restore') await restoreBackup(text);
+});
+
+function parseCSV(text) {
+  const rows = []; let row = [], field = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += c;
+    } else {
+      if (c === '"') q = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else if (c === '\r') {}
+      else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+async function importCatalog(text) {
+  toast('Importing catalog…');
+  const rows = parseCSV(text);
+  if (!rows.length) return toast('Couldn’t read that file', 'bad');
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  const iSet = head.indexOf('set_num'), iName = head.indexOf('name'),
+        iParts = head.indexOf('num_parts'), iImg = head.indexOf('img_url'),
+        iTheme = head.indexOf('theme_id');
+  if (iSet < 0 || iName < 0) return toast('Expected a Rebrickable sets.csv', 'bad');
+  const batch = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; if (!r[iSet]) continue;
+    batch.push({ setNum: r[iSet].trim(), name: r[iName], numParts: +r[iParts] || 0, imgUrl: iImg > -1 ? r[iImg] : '', theme: '' });
+  }
+  // chunked write
+  for (let i = 0; i < batch.length; i += 2000) await DB.bulk('catalog', batch.slice(i, i + 2000));
+  $('#catalogStatus').textContent = `${batch.length.toLocaleString()} sets imported — used for offline autofill`;
+  toast(`Imported ${batch.length.toLocaleString()} sets`, 'good');
+}
+
+/* export */
+$('#setExportJson').addEventListener('click', async () => {
+  const data = { app: 'brickledger', version: 1, exportedAt: new Date().toISOString(), items };
+  download('brick-ledger-backup.json', JSON.stringify(data, null, 2), 'application/json');
+  toast('Backup exported', 'good');
+});
+$('#setExportCsv').addEventListener('click', () => {
+  const cols = ['name', 'setNum', 'theme', 'barcode', 'qty', 'price', 'numParts', 'note'];
+  const head = ['Name', 'Set number', 'Theme', 'Barcode', 'Quantity', 'Value', 'Pieces', 'Note'];
+  const csv = [head.join(',')].concat(items.map(x =>
+    cols.map(c => `"${String(x[c] ?? '').replace(/"/g, '""')}"`).join(','))).join('\n');
+  download('brick-ledger.csv', csv, 'text/csv');
+  toast('Spreadsheet exported', 'good');
+});
+function download(name, content, type) {
+  const b = new Blob([content], { type }); const u = URL.createObjectURL(b);
+  const a = document.createElement('a'); a.href = u; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(u), 1000);
+}
+async function restoreBackup(text) {
+  try {
+    const d = JSON.parse(text);
+    if (!Array.isArray(d.items)) throw new Error();
+    await DB.bulk('items', d.items);
+    items = await DB.getAll('items');
+    render(); closeSheets(); toast(`Restored ${d.items.length} sets`, 'good');
+  } catch (e) { toast('That file isn’t a valid backup', 'bad'); }
+}
+
+/* install + wipe */
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; $('#installHint').textContent = 'Tap to install as an app'; });
+$('#setInstall').addEventListener('click', async () => {
+  if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; }
+  else toast('Use your browser menu → Add to Home Screen', '');
+});
+$('#setWipe').addEventListener('click', async () => {
+  if (!confirm('Erase your entire ledger from this device? This cannot be undone.')) return;
+  await DB.clear('items'); await DB.clear('memory');
+  items = []; render(); closeSheets(); toast('All ledger data erased', 'good');
+});
+
+/* ---------- network status ---------- */
+function netStatus() {
+  const on = navigator.onLine;
+  $('#netPill').className = 'pill' + (on ? '' : ' off');
+  $('#netText').textContent = on ? 'Online' : 'Offline';
+}
+addEventListener('online', netStatus); addEventListener('offline', netStatus);
+
+/* ---------- active box handling ---------- */
+async function setActiveBox(id) {
+  activeBox = id || null;
+  await DB.put('settings', { key: 'activeBox', value: activeBox });
+  $('#boxText').textContent = activeBox ? String(activeBox) : 'No box';
+}
+
+$('#boxPill').addEventListener('click', async () => {
+  const cur = activeBox || '';
+  const id = prompt('Set active box ID (leave blank to clear):', cur);
+  if (id === null) return; // cancelled
+  const trimmed = id.trim();
+  await setActiveBox(trimmed || null);
+  toast(trimmed ? `Active box set: ${trimmed}` : 'Active box cleared', '');
+});
+
+/* ---------- boot ---------- */
+(async function init() {
+  await DB.open();
+  items = await DB.getAll('items');
+  const ab = await DB.get('settings', 'activeBox');
+  if (ab?.value) await setActiveBox(ab.value);
+  netStatus();
+  render();
+  if ('serviceWorker' in navigator) {
+    try { await navigator.serviceWorker.register('sw.js'); } catch (e) {}
+  }
+})();
+</script>
+</body>
+</html>
