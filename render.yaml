@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: brick-ledger
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: BRICKOWL_KEY
+        sync: false
+      - key: REBRICKABLE_KEY
+        sync: false
+      - key: BARCODELOOKUP_KEY
+        sync: false

@@ -1,0 +1,12 @@
+{
+  "name": "brick-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Brick Ledger — offline-first Lego inventory scanner with a barcode-lookup proxy",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
