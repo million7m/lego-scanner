@@ -37,9 +37,16 @@ const MIME = {
 async function getJson(url, headers) {
   try {
     const r = await fetch(url, { headers });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      const text = await r.text();
+      console.error(`HTTP ${r.status} from ${new URL(url).hostname}:`, text.slice(0, 200));
+      return null;
+    }
     return await r.json();
-  } catch (e) { return null; }
+  } catch (e) {
+    console.error('getJson exception:', e.message);
+    return null;
+  }
 }
 function deriveSetNum(name) {
   const g = String(name || '').match(/\d{3,7}/g);
@@ -68,11 +75,14 @@ async function lookupBarcodeLookup(code, key) {
 
 async function lookupUpcitemdb(code) {
   try {
-    const d = await getJson(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
+    const url = `https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`;
+    console.log('UPCitemdb URL:', url);
+    const d = await getJson(url);
     if (!d) {
-      console.error('UPCitemdb returned null/empty');
+      console.error('UPCitemdb returned null/empty (check getJson error above)');
       return null;
     }
+    console.log('UPCitemdb raw response:', JSON.stringify(d).slice(0, 300));
     const it = (d?.items || [])[0];
     if (it?.title) {
       const result = {
@@ -84,7 +94,7 @@ async function lookupUpcitemdb(code) {
       console.log('UPCitemdb found:', result);
       return result;
     }
-    console.log('UPCitemdb no items found for:', code);
+    console.log('UPCitemdb no items found for:', code, 'items count:', (d?.items || []).length);
     return null;
   } catch (e) {
     console.error('UPCitemdb exception:', e.message);
