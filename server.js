@@ -50,6 +50,36 @@ function cleanSetName(name) {
 }
 
 /* --- the identify chain, ported from the old Android app --- */
+async function lookupBarcodeLookup(code, key) {
+  if (!key) return null;
+  const d = await getJson(`https://api.barcodelookup.com/v2/products?barcode=${encodeURIComponent(code)}&formatted=y&key=${encodeURIComponent(key)}`);
+  const p = (d?.products || [])[0];
+  if (p) {
+    const st = (p.stores || [])[0];
+    return {
+      name: p.product_name || p.title || '',
+      note: p.description || '',
+      price: st?.store_price ? (st.currency_symbol || '') + st.store_price : '',
+      source: 'Barcode Lookup',
+    };
+  }
+  return null;
+}
+
+async function lookupUpcitemdb(code) {
+  const d = await getJson(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
+  const it = (d?.items || [])[0];
+  if (it?.title) {
+    return {
+      name: it.title,
+      note: it.description || '',
+      price: it.highest_recorded_price ? String(it.highest_recorded_price) : '',
+      source: 'UPCitemdb',
+    };
+  }
+  return null;
+}
+
 async function identify(code, keys) {
   const { bo, rb, bl } = keys;
 
@@ -70,26 +100,12 @@ async function identify(code, keys) {
   }
 
   // 3) Barcode Lookup (non-LEGO / unlisted)
-  if (bl) {
-    const d = await getJson(`https://api.barcodelookup.com/v2/products?barcode=${encodeURIComponent(code)}&formatted=y&key=${encodeURIComponent(bl)}`);
-    const p = (d?.products || [])[0];
-    if (p) {
-      const st = (p.stores || [])[0];
-      return {
-        name: p.product_name || p.title || '',
-        note: p.description || '',
-        price: st?.store_price ? (st.currency_symbol || '') + st.store_price : '',
-        source: 'Barcode Lookup',
-      };
-    }
-  }
+  const blResult = await lookupBarcodeLookup(code, bl);
+  if (blResult) return blResult;
 
   // 4) UPCitemdb trial (keyless last resort)
-  const d = await getJson(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
-  const it = (d?.items || [])[0];
-  if (it?.title) {
-    return { name: it.title, price: it.highest_recorded_price ? String(it.highest_recorded_price) : '', source: 'UPCitemdb' };
-  }
+  const upcResult = await lookupUpcitemdb(code);
+  if (upcResult) return upcResult;
 
   return null;
 }
