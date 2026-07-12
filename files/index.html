@@ -285,6 +285,10 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
       <span id="sortLabel">Recent</span>
     </button>
+    <button class="sortbtn" id="btnFilterUnresolved" style="white-space:nowrap;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+      <span id="filterLabel">All</span>
+    </button>
   </div>
 
   <div class="count-row">
@@ -378,6 +382,9 @@
       <label>Note <span style="text-transform:none;color:var(--faint)">(optional — condition, location…)</span></label>
       <textarea id="fNote" rows="2" placeholder="Sealed, in bin 4"></textarea>
     </div>
+    <div class="field">
+      <label><input id="fUnresolved" type="checkbox" /> Mark as unresolved — couldn’t identify this barcode yet</label>
+    </div>
     <button class="btn ghost small" id="btnLookup" style="margin-bottom:14px">
       Look up details online (optional)
     </button>
@@ -416,6 +423,7 @@
     <div class="set-group">
       <div class="set-row tap" id="setExportJson"><div class="t"><b>Export backup (.json)</b><small>Everything, restorable later</small></div><span class="go">↓</span></div>
       <div class="set-row tap" id="setExportCsv"><div class="t"><b>Export spreadsheet (.csv)</b><small>Open in Excel or Sheets</small></div><span class="go">↓</span></div>
+      <div class="set-row tap" id="setExportXml"><div class="t"><b>Export inventory (.xml)</b><small>Import into other tools</small></div><span class="go">↓</span></div>
       <div class="set-row tap" id="setImportJson"><div class="t"><b>Restore from backup</b><small>Load a .json export</small></div><span class="go">↑</span></div>
     </div>
 
@@ -482,6 +490,7 @@ const DB = (() => {
 /* ---------- state ---------- */
 let items = [];
 let sortMode = 'recent';
+let showUnresolvedOnly = false;
 let editingId = null;
 let activeBox = null;
 const SORTS = ['recent', 'name', 'qty'];
@@ -522,6 +531,7 @@ function currentView() {
     (x.barcode || '').toLowerCase().includes(q) ||
     (x.theme || '').toLowerCase().includes(q)
   );
+  if (showUnresolvedOnly) v = v.filter(x => x.unresolved);
   if (sortMode === 'name') v.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   else if (sortMode === 'qty') v.sort((a, b) => (b.qty || 0) - (a.qty || 0));
   else v.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -557,6 +567,7 @@ function render() {
           ${x.numParts ? `<span class="tag">${x.numParts} pcs</span>` : ''}
           ${x.boxId ? `<span class="tag">box:${esc(x.boxId)}</span>` : ''}
           ${x.price ? `<span class="tag" style="color:#bfe6cb; border-color:rgba(95,184,120,.3)">${esc(String(x.price))}</span>` : ''}
+          ${x.unresolved ? `<span class="tag" style="color:var(--gold-soft); border-color:rgba(242,184,56,.3)">Unresolved</span>` : ''}
         </div>
         ${x.barcode ? `<div class="barcode">${esc(x.barcode)}</div>` : ''}
       </div>
@@ -615,6 +626,7 @@ function openEditor(item, resolvedNote) {
   // stash image/parts on the form element
   $('#editSheet').dataset.img = item?.imgUrl || '';
   $('#editSheet').dataset.parts = item?.numParts || '';
+  $('#fUnresolved').checked = item?.unresolved || false;
   openSheet($('#editSheet'));
   if (!editingId && !item?.name) setTimeout(() => $('#fName').focus(), 320);
 }
@@ -639,6 +651,7 @@ async function save() {
     note: $('#fNote').value.trim(),
     imgUrl: $('#editSheet').dataset.img || it.imgUrl || '',
     numParts: +($('#editSheet').dataset.parts) || it.numParts || 0,
+    unresolved: $('#fUnresolved').checked,
     updatedAt: now,
   });
   // If an active box is set, associate this item with that box
@@ -697,6 +710,7 @@ async function resolveBarcode(code) {
   // the user may have closed the sheet or scanned something else meanwhile
   if (!$('#editSheet').classList.contains('show') || $('#fBarcode').value !== code) return;
   if (found) {
+    $('#fUnresolved').checked = false;
     if (found.name && !$('#fName').value) $('#fName').value = found.name;
     if (found.setNum && !$('#fSet').value) $('#fSet').value = found.setNum;
     if (found.theme && !$('#fTheme').value) $('#fTheme').value = found.theme;
@@ -707,10 +721,11 @@ async function resolveBarcode(code) {
     setResolvedNote({ icon: '✓',
       text: `Identified via ${found.source}${found.setNum ? ' · set ' + found.setNum : ''}. Check the details and save.` });
   } else {
+    $('#fUnresolved').checked = true;
     const boKey = (await DB.get('settings', 'boKey'))?.value;
     setResolvedNote(boKey
-      ? { warn: true, icon: '＋', text: 'Couldn’t identify this barcode online. Name it once — it’ll be recognised instantly next time.' }
-      : { warn: true, icon: '＋', text: 'New barcode. Add a BrickOwl key in Settings to auto‑identify, or just name it once — it’s remembered either way.' });
+      ? { warn: true, icon: '＋', text: 'Couldn’t identify this barcode online. You can still save it now and fill details later.' }
+      : { warn: true, icon: '＋', text: 'New barcode. Add a BrickOwl key in Settings to auto‑identify, or save it now and fill details later.' });
   }
 }
 
@@ -848,30 +863,7 @@ async function lookupGenericBarcode(code) {
       }
     } catch (e) {}
   }
-  try {
-    const off = await lookupOpenFoodFacts(code);
-    if (off) return off;
-  } catch (e) {}
   return null;
-}
-
-async function lookupOpenFoodFacts(code) {
-  try {
-    const r = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`);
-    if (!r.ok) return null;
-    const d = await r.json();
-    if (d.status !== 1) return null;
-    const p = d.product || {};
-    const name = p.product_name || p.generic_name || '';
-    if (!name) return null;
-    return {
-      name,
-      note: p.brands ? `Brand: ${p.brands}` : '',
-      source: 'OpenFoodFacts',
-    };
-  } catch (e) {
-    return null;
-  }
 }
 
 /* ---------- online lookup (optional, best-effort) ---------- */
@@ -1005,6 +997,12 @@ $('#btnSort').addEventListener('click', () => {
   $('#sortLabel').textContent = SORT_LABELS[sortMode];
   render();
 });
+$('#btnFilterUnresolved').addEventListener('click', () => {
+  showUnresolvedOnly = !showUnresolvedOnly;
+  $('#filterLabel').textContent = showUnresolvedOnly ? 'Unresolved' : 'All';
+  $('#btnFilterUnresolved').classList.toggle('active', showUnresolvedOnly);
+  render();
+});
 $('#search').addEventListener('input', render);
 
 /* ---------- settings ---------- */
@@ -1086,12 +1084,41 @@ $('#setExportJson').addEventListener('click', async () => {
   toast('Backup exported', 'good');
 });
 $('#setExportCsv').addEventListener('click', () => {
-  const cols = ['name', 'setNum', 'theme', 'barcode', 'qty', 'price', 'numParts', 'note'];
-  const head = ['Name', 'Set number', 'Theme', 'Barcode', 'Quantity', 'Value', 'Pieces', 'Note'];
+  const cols = ['name', 'setNum', 'theme', 'barcode', 'qty', 'price', 'numParts', 'note', 'unresolved', 'boxId', 'imgUrl', 'createdAt', 'updatedAt'];
+  const head = ['Name', 'Set number', 'Theme', 'Barcode', 'Quantity', 'Value', 'Pieces', 'Note', 'Unresolved', 'Box', 'Image URL', 'Created at', 'Updated at'];
   const csv = [head.join(',')].concat(items.map(x =>
-    cols.map(c => `"${String(x[c] ?? '').replace(/"/g, '""')}"`).join(','))).join('\n');
+    cols.map(c => {
+      let v = x[c];
+      if (c === 'unresolved') v = x.unresolved ? '1' : '';
+      return `"${String(v ?? '').replace(/"/g, '""')}"`;
+    }).join(','))).join('\n');
   download('brick-ledger.csv', csv, 'text/csv');
   toast('Spreadsheet exported', 'good');
+});
+$('#setExportXml').addEventListener('click', () => {
+  const escapeXml = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  const xmlLines = ['<?xml version="1.0" encoding="UTF-8"?>', '<inventory>'];
+  items.forEach(x => {
+    xmlLines.push('  <item>');
+    xmlLines.push(`    <id>${escapeXml(x.id)}</id>`);
+    xmlLines.push(`    <name>${escapeXml(x.name)}</name>`);
+    xmlLines.push(`    <setNum>${escapeXml(x.setNum)}</setNum>`);
+    xmlLines.push(`    <theme>${escapeXml(x.theme)}</theme>`);
+    xmlLines.push(`    <barcode>${escapeXml(x.barcode)}</barcode>`);
+    xmlLines.push(`    <qty>${escapeXml(x.qty)}</qty>`);
+    xmlLines.push(`    <price>${escapeXml(x.price)}</price>`);
+    xmlLines.push(`    <numParts>${escapeXml(x.numParts)}</numParts>`);
+    xmlLines.push(`    <note>${escapeXml(x.note)}</note>`);
+    xmlLines.push(`    <imgUrl>${escapeXml(x.imgUrl)}</imgUrl>`);
+    xmlLines.push(`    <boxId>${escapeXml(x.boxId)}</boxId>`);
+    xmlLines.push(`    <unresolved>${x.unresolved ? 'true' : 'false'}</unresolved>`);
+    xmlLines.push(`    <createdAt>${escapeXml(x.createdAt)}</createdAt>`);
+    xmlLines.push(`    <updatedAt>${escapeXml(x.updatedAt)}</updatedAt>`);
+    xmlLines.push('  </item>');
+  });
+  xmlLines.push('</inventory>');
+  download('brick-ledger.xml', xmlLines.join('\n'), 'application/xml');
+  toast('Inventory exported', 'good');
 });
 function download(name, content, type) {
   const b = new Blob([content], { type }); const u = URL.createObjectURL(b);

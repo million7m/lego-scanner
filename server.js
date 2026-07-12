@@ -125,54 +125,63 @@ function decodeHtmlEntities(text) {
     .replace(/&#39;/g, "'");
 }
 
-async function lookupOpenFoodFacts(code) {
-  try {
-    const url = `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`;
-    console.log('OpenFoodFacts URL:', url);
-    const d = await getJson(url);
-    if (!d || d.status !== 1) {
-      console.log('OpenFoodFacts no product found for:', code, 'status:', d?.status);
-      return null;
-    }
-    const p = d.product || {};
-    const result = {
-      name: p.product_name || p.generic_name || '',
-      note: p.brands ? `Brand: ${p.brands}` : '',
-      source: 'OpenFoodFacts',
-    };
-    if (!result.name) return null;
-    console.log('OpenFoodFacts found:', result);
-    return result;
-  } catch (e) {
-    console.error('OpenFoodFacts exception:', e.message);
-    return null;
-  }
-}
-
 async function lookupWebFallback(code) {
-  try {
-    const url = `https://www.barcodelookup.com/${encodeURIComponent(code)}`;
-    console.log('Web fallback URL:', url);
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BrickLedger/1.0)' }
-    });
-    if (!r.ok) {
-      console.error('Web fallback HTTP error:', r.status);
-      return null;
+  const fallbackUrls = [
+    `https://www.upcitemdb.com/upc/${encodeURIComponent(code)}`,
+    `https://www.barcodelookup.com/${encodeURIComponent(code)}`,
+  ];
+
+  for (const url of fallbackUrls) {
+    try {
+      console.log('Web fallback URL:', url);
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      if (!r.ok) {
+        console.error('Web fallback HTTP error:', r.status, 'for', url);
+        continue;
+      }
+      const html = await r.text();
+      const titleRaw = (
+        html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+        html.match(/<title>([^<]+)<\/title>/i)?.[1] ||
+        ''
+      ).trim();
+      const descRawMatch = html.match(/<meta[^>]*name=["']Description["'][^>]*content=["']([^"']+)["'][^>]*>/i) ||
+        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']Description["'][^>]*>/i);
+      const descRaw = descRawMatch ? descRawMatch[1] : '';
+      const title = decodeHtmlEntities(titleRaw);
+      let name = '';
+      const titleMatch = title.match(/^\s*UPC\s*\d+\s*[-–]\s*(.+?)(?:\s*[|].*)?$/i);
+      if (titleMatch) {
+        name = titleMatch[1].trim();
+      } else {
+        const normalized = title.replace(/\s*[|].*$/, '').trim();
+        if (normalized && !/^UPC\s*\d+$/i.test(normalized)) {
+          name = normalized;
+        }
+      }
+      if (!name && descRaw) {
+        const desc = decodeHtmlEntities(descRaw);
+        const descMatch = desc.match(/product\s+(.+?)(?:,|$)/i);
+        if (descMatch) name = descMatch[1].trim();
+      }
+      if (!name) {
+        console.log('Web fallback parse failed for', url);
+        continue;
+      }
+      const result = { name, source: 'WebFallback' };
+      console.log('Web fallback found:', result);
+      return result;
+    } catch (e) {
+      console.error('Web fallback exception for', url, e.message);
     }
-    const html = await r.text();
-    const meta = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
-    const title = meta ? meta[1] : (html.match(/<title>([^<]+)<\/title>/i) || [])[1];
-    if (!title) return null;
-    const name = decodeHtmlEntities(title).replace(/\s*[|\-–].*$/, '').trim();
-    if (!name) return null;
-    const result = { name, source: 'WebFallback' };
-    console.log('Web fallback found:', result);
-    return result;
-  } catch (e) {
-    console.error('Web fallback exception:', e.message);
-    return null;
   }
+  return null;
 }
 
 async function identify(code, keys) {
@@ -220,15 +229,7 @@ async function identify(code, keys) {
     if (upcResult) return upcResult;
   } catch (e) { console.error('UPCitemdb error:', e.message); }
 
-  // 5) OpenFoodFacts fallback for general barcodes
-  try {
-    console.log('Trying OpenFoodFacts for:', code);
-    const offResult = await lookupOpenFoodFacts(code);
-    console.log('OpenFoodFacts result:', offResult);
-    if (offResult) return offResult;
-  } catch (e) { console.error('OpenFoodFacts error:', e.message); }
-
-  // 6) Web fallback using barcode result page title
+  // 5) Web fallback using barcode result page title
   try {
     console.log('Trying web fallback for:', code);
     const webResult = await lookupWebFallback(code);
