@@ -106,6 +106,7 @@ async function identify(code, keys) {
   const { bo, rb, bl } = keys;
 
   // 1) BrickOwl: box barcode -> set
+  /*
   if (bo) {
     try {
       const d = await getJson(`https://api.brickowl.com/v1/catalog/search?key=${encodeURIComponent(bo)}&query=${encodeURIComponent(code)}`);
@@ -122,12 +123,21 @@ async function identify(code, keys) {
       }
     } catch (e) { console.error('BrickOwl error:', e.message); }
   }
+  */
+  if (bo) {
+    console.log('BrickOwl lookup currently disabled due to broken 403 API access.');
+  }
 
   // 3) Barcode Lookup (non-LEGO / unlisted)
+  /*
   try {
     const blResult = await lookupBarcodeLookup(code, bl);
     if (blResult) { console.log('BL result:', blResult); return blResult; }
   } catch (e) { console.error('BarcodeLookup error:', e.message); }
+  */
+  if (bl) {
+    console.log('BarcodeLookup lookup currently disabled due to broken 403 API access.');
+  }
 
   // 4) UPCitemdb trial (keyless last resort)
   try {
