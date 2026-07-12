@@ -67,17 +67,29 @@ async function lookupBarcodeLookup(code, key) {
 }
 
 async function lookupUpcitemdb(code) {
-  const d = await getJson(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
-  const it = (d?.items || [])[0];
-  if (it?.title) {
-    return {
-      name: it.title,
-      note: it.description || '',
-      price: it.highest_recorded_price ? String(it.highest_recorded_price) : '',
-      source: 'UPCitemdb',
-    };
+  try {
+    const d = await getJson(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`);
+    if (!d) {
+      console.error('UPCitemdb returned null/empty');
+      return null;
+    }
+    const it = (d?.items || [])[0];
+    if (it?.title) {
+      const result = {
+        name: it.title,
+        note: it.description || '',
+        price: it.highest_recorded_price ? String(it.highest_recorded_price) : '',
+        source: 'UPCitemdb',
+      };
+      console.log('UPCitemdb found:', result);
+      return result;
+    }
+    console.log('UPCitemdb no items found for:', code);
+    return null;
+  } catch (e) {
+    console.error('UPCitemdb exception:', e.message);
+    return null;
   }
-  return null;
 }
 
 async function identify(code, keys) {
@@ -85,27 +97,35 @@ async function identify(code, keys) {
 
   // 1) BrickOwl: box barcode -> set
   if (bo) {
-    const d = await getJson(`https://api.brickowl.com/v1/catalog/search?key=${encodeURIComponent(bo)}&query=${encodeURIComponent(code)}`);
-    const hit = (d?.results || []).find(x => x.type === 'Set') || (d?.results || [])[0];
-    if (hit?.name) {
-      const setNum = deriveSetNum(hit.name);
-      const out = { name: cleanSetName(hit.name), setNum, source: 'BrickOwl' };
-      // 2) Rebrickable enriches with image + piece count
-      if (setNum && rb) {
-        const s = await getJson(`https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/`, { Authorization: 'key ' + rb });
-        if (s) { out.name = out.name || s.name; out.numParts = s.num_parts; out.imgUrl = s.set_img_url; }
+    try {
+      const d = await getJson(`https://api.brickowl.com/v1/catalog/search?key=${encodeURIComponent(bo)}&query=${encodeURIComponent(code)}`);
+      const hit = (d?.results || []).find(x => x.type === 'Set') || (d?.results || [])[0];
+      if (hit?.name) {
+        const setNum = deriveSetNum(hit.name);
+        const out = { name: cleanSetName(hit.name), setNum, source: 'BrickOwl' };
+        // 2) Rebrickable enriches with image + piece count
+        if (setNum && rb) {
+          const s = await getJson(`https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/`, { Authorization: 'key ' + rb });
+          if (s) { out.name = out.name || s.name; out.numParts = s.num_parts; out.imgUrl = s.set_img_url; }
+        }
+        return out;
       }
-      return out;
-    }
+    } catch (e) { console.error('BrickOwl error:', e.message); }
   }
 
   // 3) Barcode Lookup (non-LEGO / unlisted)
-  const blResult = await lookupBarcodeLookup(code, bl);
-  if (blResult) return blResult;
+  try {
+    const blResult = await lookupBarcodeLookup(code, bl);
+    if (blResult) { console.log('BL result:', blResult); return blResult; }
+  } catch (e) { console.error('BarcodeLookup error:', e.message); }
 
   // 4) UPCitemdb trial (keyless last resort)
-  const upcResult = await lookupUpcitemdb(code);
-  if (upcResult) return upcResult;
+  try {
+    console.log('Trying UPCitemdb for:', code);
+    const upcResult = await lookupUpcitemdb(code);
+    console.log('UPC result:', upcResult);
+    if (upcResult) return upcResult;
+  } catch (e) { console.error('UPCitemdb error:', e.message); }
 
   return null;
 }
