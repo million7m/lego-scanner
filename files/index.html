@@ -830,7 +830,30 @@ async function lookupGenericBarcode(code) {
       }
     }
   } catch (e) {}
+  try {
+    const off = await lookupOpenFoodFacts(code);
+    if (off) return off;
+  } catch (e) {}
   return null;
+}
+
+async function lookupOpenFoodFacts(code) {
+  try {
+    const r = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (d.status !== 1) return null;
+    const p = d.product || {};
+    const name = p.product_name || p.generic_name || '';
+    if (!name) return null;
+    return {
+      name,
+      note: p.brands ? `Brand: ${p.brands}` : '',
+      source: 'OpenFoodFacts',
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 /* ---------- online lookup (optional, best-effort) ---------- */

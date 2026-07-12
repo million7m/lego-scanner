@@ -102,6 +102,30 @@ async function lookupUpcitemdb(code) {
   }
 }
 
+async function lookupOpenFoodFacts(code) {
+  try {
+    const url = `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`;
+    console.log('OpenFoodFacts URL:', url);
+    const d = await getJson(url);
+    if (!d || d.status !== 1) {
+      console.log('OpenFoodFacts no product found for:', code, 'status:', d?.status);
+      return null;
+    }
+    const p = d.product || {};
+    const result = {
+      name: p.product_name || p.generic_name || '',
+      note: p.brands ? `Brand: ${p.brands}` : '',
+      source: 'OpenFoodFacts',
+    };
+    if (!result.name) return null;
+    console.log('OpenFoodFacts found:', result);
+    return result;
+  } catch (e) {
+    console.error('OpenFoodFacts exception:', e.message);
+    return null;
+  }
+}
+
 async function identify(code, keys) {
   const { bo, rb, bl } = keys;
 
@@ -146,6 +170,14 @@ async function identify(code, keys) {
     console.log('UPC result:', upcResult);
     if (upcResult) return upcResult;
   } catch (e) { console.error('UPCitemdb error:', e.message); }
+
+  // 5) OpenFoodFacts fallback for general barcodes
+  try {
+    console.log('Trying OpenFoodFacts for:', code);
+    const offResult = await lookupOpenFoodFacts(code);
+    console.log('OpenFoodFacts result:', offResult);
+    if (offResult) return offResult;
+  } catch (e) { console.error('OpenFoodFacts error:', e.message); }
 
   return null;
 }
