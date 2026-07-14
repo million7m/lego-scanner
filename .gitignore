@@ -6,3 +6,10 @@ yarn-error.log*
 logs/
 *.log
 coverage/
+
+# local experiments / scratch — not part of the app
+files.zip
+genkey.bat
+regenerate_ssh_key.ps1
+root.html
+tmp_*

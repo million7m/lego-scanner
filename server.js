@@ -184,6 +184,63 @@ async function lookupWebFallback(code) {
   return null;
 }
 
+/* Pull likely LEGO set numbers (4–7 digits) out of a product title, skipping
+   piece counts like "(7541 pieces)" so we don't mistake those for the set #. */
+function setNumberCandidates(name) {
+  const cleaned = String(name || '')
+    .replace(/\(([^)]*\b(?:piece|pieces|pcs|teile|stück)\b[^)]*)\)/gi, ' ')
+    .replace(/\b\d{3,7}\s*(?:piece|pieces|pcs)\b/gi, ' ');
+  return [...new Set(cleaned.match(/\b\d{4,7}\b/g) || [])];
+}
+
+/* Keyword fallback for theme when Rebrickable isn't available. */
+const KNOWN_THEMES = ['Star Wars', 'Technic', 'Harry Potter', 'Speed Champions', 'Super Mario',
+  'Super Heroes', 'Marvel', 'Jurassic World', 'Lord of the Rings', 'City', 'Creator', 'Friends',
+  'Ninjago', 'Duplo', 'Architecture', 'Ideas', 'Minecraft', 'Disney', 'Icons', 'Botanical',
+  'Classic', 'Mindstorms', 'Batman', 'Avatar', 'Wednesday', 'Hogwarts'];
+function guessTheme(name) {
+  const n = String(name || '');
+  return KNOWN_THEMES.find(t => new RegExp('\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(n)) || '';
+}
+
+const THEME_CACHE = new Map();
+async function rebrickableTheme(themeId, rb) {
+  if (!themeId || !rb) return '';
+  if (THEME_CACHE.has(themeId)) return THEME_CACHE.get(themeId);
+  const t = await getJson(`https://rebrickable.com/api/v3/lego/themes/${themeId}/`, { Authorization: 'key ' + rb });
+  const name = t?.name || '';
+  THEME_CACHE.set(themeId, name);
+  return name;
+}
+
+/* Given a lookup result that has a product title, fill in set number + theme
+   (+ image + piece count). Validates candidate set numbers against Rebrickable
+   so we only accept a number that's a real set; falls back to a best-guess set
+   number and keyword theme when there's no Rebrickable key. */
+async function enrichLegoSet(result, rb) {
+  if (!result?.name) return result;
+  const candidates = setNumberCandidates(result.name);
+  if (rb) {
+    for (const c of candidates.slice(0, 5)) {
+      const setNum = c.includes('-') ? c : c + '-1';
+      const s = await getJson(`https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/`, { Authorization: 'key ' + rb });
+      if (s?.set_num) {
+        result.name = s.name || result.name;
+        result.setNum = s.set_num;
+        result.numParts = s.num_parts;
+        result.imgUrl = s.set_img_url;
+        result.theme = await rebrickableTheme(s.theme_id, rb);
+        result.source = result.source ? result.source + ' + Rebrickable' : 'Rebrickable';
+        return result;
+      }
+    }
+  }
+  // no key, or nothing resolved — best effort from the title alone
+  if (!result.setNum && candidates.length) result.setNum = candidates[0] + '-1';
+  if (!result.theme) result.theme = guessTheme(result.name);
+  return result;
+}
+
 async function identify(code, keys) {
   const { bo, rb, bl } = keys;
 
@@ -226,7 +283,7 @@ async function identify(code, keys) {
     console.log('Trying UPCitemdb for:', code);
     const upcResult = await lookupUpcitemdb(code);
     console.log('UPC result:', upcResult);
-    if (upcResult) return upcResult;
+    if (upcResult) { const out = await enrichLegoSet(upcResult, rb); console.log('Identified (enriched):', out); return out; }
   } catch (e) { console.error('UPCitemdb error:', e.message); }
 
   // 5) Web fallback using barcode result page title
@@ -234,7 +291,7 @@ async function identify(code, keys) {
     console.log('Trying web fallback for:', code);
     const webResult = await lookupWebFallback(code);
     console.log('Web fallback result:', webResult);
-    if (webResult) return webResult;
+    if (webResult) { const out = await enrichLegoSet(webResult, rb); console.log('Identified (enriched):', out); return out; }
   } catch (e) { console.error('Web fallback error:', e.message); }
 
   return null;
