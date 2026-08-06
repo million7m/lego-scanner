@@ -35,6 +35,112 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+/* ============================================================
+   Local barcode database — the primary lookup.
+
+   data/barcodes.json   barcode -> set number   (harvested from Brickset)
+   data/sets.json       set number -> metadata  (Rebrickable bulk CSV)
+   data/contributed.json  barcodes resolved by hand in the app
+
+   This is an exact table, so it replaces the old approach of scraping a
+   product title and guessing which number in it was the set number. It
+   needs no API keys, can't be rate-limited, and answers instantly even
+   on a cold dyno. The online chain below is now only a fallback for
+   barcodes the table doesn't have (including non-LEGO items).
+   ============================================================ */
+const DATA_DIR = path.join(__dirname, 'data');
+const CONTRIB_FILE = path.join(DATA_DIR, 'contributed.json');
+const IMG_PREFIX = 'https://cdn.rebrickable.com/media/sets/';
+
+const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map() };
+
+function loadJsonFile(name) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(DATA_DIR, name), 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.error(`Failed to read data/${name}:`, e.message);
+    return null;
+  }
+}
+
+function loadDb() {
+  const barcodes = loadJsonFile('barcodes.json') || {};
+  const sets = loadJsonFile('sets.json') || {};
+  const contributed = loadJsonFile('contributed.json') || {};
+  DB.barcodes = new Map(Object.entries(barcodes));
+  DB.sets = new Map(Object.entries(sets));
+  DB.contributed = new Map(Object.entries(contributed));
+  console.log(`Local DB: ${DB.barcodes.size} harvested barcodes, ${DB.sets.size} sets, ` +
+    `${DB.contributed.size} contributed`);
+  if (!DB.barcodes.size) {
+    console.warn('  No barcodes.json yet — run tools/build-sets.js then tools/harvest-barcodes.js');
+  }
+}
+
+/* Scanners report the same product in more than one form: a UPC-A may arrive
+   as 12 digits or zero-padded to 13, and EAN-8 sometimes carries padding.
+   Try every equivalent form so a match isn't missed on formatting alone. */
+function codeVariants(code) {
+  const d = String(code || '').replace(/\D/g, '');
+  const out = new Set();
+  if (!d) return [];
+  out.add(d);
+  if (d.length === 12) out.add('0' + d);
+  if (d.length === 13 && d.startsWith('0')) out.add(d.slice(1));
+  if (d.length === 14 && d.startsWith('0')) out.add(d.slice(1));
+  out.add(d.replace(/^0+/, ''));
+  return [...out].filter(Boolean);
+}
+
+function setDetails(setNum) {
+  const row = DB.sets.get(setNum);
+  if (!row) return { setNum };
+  const [name, year, theme, numParts, subtheme, img] = row;
+  return {
+    name,
+    setNum,
+    year: year || undefined,
+    theme: theme || '',
+    subtheme: subtheme || undefined,
+    numParts: numParts || undefined,
+    imgUrl: img || IMG_PREFIX + setNum + '.jpg',
+  };
+}
+
+/* Exact lookup against the local table. Contributions win over the harvest:
+   if someone corrected a barcode by hand, that's the better answer. */
+function lookupLocal(code) {
+  for (const v of codeVariants(code)) {
+    const setNum = DB.contributed.get(v) || DB.barcodes.get(v);
+    if (setNum) {
+      const hand = DB.contributed.has(v);
+      return {
+        ...setDetails(setNum),
+        source: hand ? 'Brick Ledger DB (contributed)' : 'Brick Ledger DB',
+        exact: true,
+      };
+    }
+  }
+  return null;
+}
+
+/* Persist a hand-resolved barcode. Note the free Render tier has an ephemeral
+   filesystem, so this survives restarts only until the next deploy — pull them
+   down via GET /api/contributions and commit them to keep them for good. */
+function saveContribution(code, setNum) {
+  const digits = String(code || '').replace(/\D/g, '');
+  const norm = /-\d+$/.test(setNum) ? setNum : setNum + '-1';
+  if (!digits || !norm) return null;
+  DB.contributed.set(digits, norm);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(CONTRIB_FILE, JSON.stringify(Object.fromEntries(DB.contributed), null, 2));
+  } catch (e) {
+    console.error('Could not persist contribution:', e.message);
+  }
+  return { barcode: digits, setNum: norm, known: DB.sets.has(norm) };
+}
+
 /* --- helpers (mirror the client so results are shaped identically) --- */
 async function getJson(url, headers) {
   try {
@@ -244,6 +350,10 @@ async function enrichLegoSet(result, rb) {
 async function identify(code, keys) {
   const { bo, rb, bl } = keys;
 
+  // 0) Local barcode table — exact, keyless, instant. Almost always the answer.
+  const local = lookupLocal(code);
+  if (local) { console.log('Identified from local DB:', local.setNum, local.name); return local; }
+
   // 1) BrickOwl: box barcode -> set
   /*
   if (bo) {
@@ -317,19 +427,76 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ result, debug: { boKey: !!keys.bo, rbKey: !!keys.rb, blKey: !!keys.bl } }));
   }
 
+  /* Resolve a set number straight from the local catalog — lets the app fill in
+     name/theme/pieces/image with no Rebrickable key and no CSV import. */
+  if (u.pathname === '/api/set') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const raw = (u.searchParams.get('num') || '').trim();
+    if (!raw) { res.writeHead(400); return res.end('{"error":"missing num"}'); }
+    const norm = /-\d+$/.test(raw) ? raw : raw + '-1';
+    const hit = DB.sets.has(norm) ? norm : (DB.sets.has(raw) ? raw : '');
+    res.writeHead(200);
+    return res.end(JSON.stringify({ result: hit ? setDetails(hit) : null }));
+  }
+
+  /* Teach the shared table a barcode the harvest didn't have. The app posts
+     here whenever you save an item that has both a barcode and a set number. */
+  if (u.pathname === '/api/contribute') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (req.method !== 'POST') { res.writeHead(405); return res.end('{"error":"POST only"}'); }
+    let body = '';
+    try {
+      for await (const chunk of req) {
+        body += chunk;
+        if (body.length > 4096) { res.writeHead(413); return res.end('{"error":"too large"}'); }
+      }
+      const { barcode, setNum } = JSON.parse(body || '{}');
+      if (!barcode || !setNum) { res.writeHead(400); return res.end('{"error":"barcode and setNum required"}'); }
+      // Don't overwrite a harvested barcode that already resolves correctly.
+      const existing = lookupLocal(barcode);
+      if (existing && existing.setNum === (/-\d+$/.test(setNum) ? setNum : setNum + '-1')) {
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, alreadyKnown: true, setNum: existing.setNum }));
+      }
+      const saved = saveContribution(barcode, setNum);
+      if (!saved) { res.writeHead(400); return res.end('{"error":"invalid barcode or setNum"}'); }
+      console.log(`Contributed: ${saved.barcode} -> ${saved.setNum} (in catalog: ${saved.known})`);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true, ...saved, total: DB.contributed.size }));
+    } catch (e) {
+      console.error('contribute error:', e.message);
+      res.writeHead(400);
+      return res.end('{"error":"bad request"}');
+    }
+  }
+
+  /* Download the hand-resolved barcodes so they can be committed to the repo —
+     the free Render tier's disk is wiped on each deploy. */
+  if (u.pathname === '/api/contributions') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="contributed.json"');
+    res.writeHead(200);
+    return res.end(JSON.stringify(Object.fromEntries(DB.contributed), null, 2));
+  }
+
   if (u.pathname === '/api/debug') {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.writeHead(200);
     return res.end(JSON.stringify({
+      localDb: {
+        harvestedBarcodes: DB.barcodes.size,
+        contributedBarcodes: DB.contributed.size,
+        sets: DB.sets.size,
+      },
       env: {
         BRICKOWL_KEY: !!process.env.BRICKOWL_KEY,
         REBRICKABLE_KEY: !!process.env.REBRICKABLE_KEY,
         BARCODELOOKUP_KEY: !!process.env.BARCODELOOKUP_KEY,
       },
       canReach: {
-        brickowl: 'test by scanning',
-        barcodelookup: 'test by scanning',
-        upcitemdb: 'always tried',
+        brickowl: 'disabled (no key issued)',
+        barcodelookup: 'disabled (no key issued)',
+        upcitemdb: 'fallback only',
       },
     }));
   }
@@ -346,4 +513,5 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
+loadDb();
 server.listen(PORT, () => console.log(`Brick Ledger running on http://localhost:${PORT}`));

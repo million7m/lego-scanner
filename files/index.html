@@ -661,6 +661,8 @@ async function save() {
   // teach the barcode→set memory for instant future scans
   if (barcode) {
     await DB.put('memory', { barcode, name, setNum, theme: it.theme, imgUrl: it.imgUrl, numParts: it.numParts });
+    // and teach the shared table, so this barcode is known on every device
+    if (setNum) contributeBarcode(barcode, setNum);
   }
   editingId = null;
   render(); closeSheets();
@@ -684,6 +686,18 @@ $('#list').addEventListener('click', e => {
   const ed = e.target.closest('[data-edit]');
   if (ed) { const it = items.find(x => x.id === ed.dataset.edit); if (it) openEditor(it); }
 });
+
+/* Push a hand-resolved barcode into the server's shared table. Fire-and-forget:
+   the local `memory` store already covers this device, so a failure here (offline,
+   dyno asleep) costs nothing and is retried the next time the item is saved. */
+function contributeBarcode(barcode, setNum) {
+  if (!navigator.onLine) return;
+  fetch('api/contribute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ barcode, setNum }),
+  }).catch(() => {});
+}
 
 /* ---------- barcode resolve ---------- */
 async function resolveBarcode(code) {
@@ -722,10 +736,9 @@ async function resolveBarcode(code) {
       text: `Identified via ${found.source}${found.setNum ? ' · set ' + found.setNum : ''}. Check the details and save.` });
   } else {
     $('#fUnresolved').checked = true;
-    const boKey = (await DB.get('settings', 'boKey'))?.value;
-    setResolvedNote(boKey
-      ? { warn: true, icon: '＋', text: 'Couldn’t identify this barcode online. You can still save it now and fill details later.' }
-      : { warn: true, icon: '＋', text: 'New barcode. Add a BrickOwl key in Settings to auto‑identify, or save it now and fill details later.' });
+    setResolvedNote({ warn: true, icon: '＋',
+      text: 'Not in the barcode database yet. Type the set number from the box — it’s '
+          + 'saved to the shared table, so this barcode resolves instantly everywhere from now on.' });
   }
 }
 
@@ -880,7 +893,17 @@ $('#btnLookup').addEventListener('click', async () => {
     applyLookup(cat.name, cat.theme, cat.numParts, cat.imgUrl);
     btn.textContent = orig; toast('Filled from catalog', 'good'); return;
   }
-  if (!key) { btn.textContent = orig; toast('Add a Rebrickable key in Settings, or import the catalog', 'bad'); return; }
+  // then the server's own catalog — all 27k sets, no key needed
+  try {
+    const r = await fetch('api/set?num=' + encodeURIComponent(setNum));
+    const d = await r.json();
+    if (d.result) {
+      applyLookup(d.result.name, d.result.theme, d.result.numParts, d.result.imgUrl);
+      if (!$('#fSet').value.includes('-')) $('#fSet').value = d.result.setNum;
+      btn.textContent = orig; toast('Details found', 'good'); return;
+    }
+  } catch (e) {}
+  if (!key) { btn.textContent = orig; toast('No set with that number — check the digits on the box', 'bad'); return; }
   try {
     const r = await fetch(`https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(norm)}/`, {
       headers: { Authorization: 'key ' + key }

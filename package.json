@@ -4,7 +4,9 @@
   "private": true,
   "description": "Brick Ledger — offline-first Lego inventory scanner with a barcode-lookup proxy",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build:sets": "node tools/build-sets.js",
+    "harvest": "node tools/harvest-barcodes.js"
   },
   "engines": {
     "node": ">=18"

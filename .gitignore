@@ -13,3 +13,8 @@ genkey.bat
 regenerate_ssh_key.ps1
 root.html
 tmp_*
+
+# harvester working files. data/sets.json, data/barcodes.json and
+# data/contributed.json ARE committed — they're what the app serves.
+data/cache/
+data/harvest-state.json
