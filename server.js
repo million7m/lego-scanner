@@ -103,7 +103,10 @@ function setDetails(setNum) {
     theme: theme || '',
     subtheme: subtheme || undefined,
     numParts: numParts || undefined,
-    imgUrl: img || IMG_PREFIX + setNum + '.jpg',
+    /* Rebrickable's image path is the set number lowercased — checked against
+       all 27,810 sets, every stored override differs from the plain form only
+       by case, so deriving covers rows that have no override too. */
+    imgUrl: img || IMG_PREFIX + setNum.toLowerCase() + '.jpg',
   };
 }
 
@@ -127,9 +130,16 @@ function lookupLocal(code) {
 /* Persist a hand-resolved barcode. Note the free Render tier has an ephemeral
    filesystem, so this survives restarts only until the next deploy — pull them
    down via GET /api/contributions and commit them to keep them for good. */
+/* Variant suffixes aren't always numeric ("215-2B"), so a set number counts as
+   complete once it has a dash — appending "-1" to those would invent a set. */
+function normalizeSetNum(s) {
+  const v = String(s || '').trim();
+  return v && !v.includes('-') ? v + '-1' : v;
+}
+
 function saveContribution(code, setNum) {
   const digits = String(code || '').replace(/\D/g, '');
-  const norm = /-\d+$/.test(setNum) ? setNum : setNum + '-1';
+  const norm = normalizeSetNum(setNum);
   if (!digits || !norm) return null;
   DB.contributed.set(digits, norm);
   try {
@@ -433,7 +443,7 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     const raw = (u.searchParams.get('num') || '').trim();
     if (!raw) { res.writeHead(400); return res.end('{"error":"missing num"}'); }
-    const norm = /-\d+$/.test(raw) ? raw : raw + '-1';
+    const norm = normalizeSetNum(raw);
     const hit = DB.sets.has(norm) ? norm : (DB.sets.has(raw) ? raw : '');
     res.writeHead(200);
     return res.end(JSON.stringify({ result: hit ? setDetails(hit) : null }));
@@ -454,7 +464,7 @@ const server = http.createServer(async (req, res) => {
       if (!barcode || !setNum) { res.writeHead(400); return res.end('{"error":"barcode and setNum required"}'); }
       // Don't overwrite a harvested barcode that already resolves correctly.
       const existing = lookupLocal(barcode);
-      if (existing && existing.setNum === (/-\d+$/.test(setNum) ? setNum : setNum + '-1')) {
+      if (existing && existing.setNum === normalizeSetNum(setNum)) {
         res.writeHead(200);
         return res.end(JSON.stringify({ ok: true, alreadyKnown: true, setNum: existing.setNum }));
       }

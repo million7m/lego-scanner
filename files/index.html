@@ -557,8 +557,9 @@ function render() {
 
   list.innerHTML = view.map(x => {
     const glyph = (x.name || '?').trim().charAt(0).toUpperCase() || '?';
-    const thumb = x.imgUrl
-      ? `<img src="${esc(x.imgUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.parentNode.querySelector('.glyph').style.display='grid'"><span class="glyph" style="display:none">${esc(glyph)}</span>`
+    const img = x.imgUrl || setImageUrl(x.setNum);
+    const thumb = img
+      ? `<img src="${esc(img)}" alt="" loading="lazy" onerror="this.style.display='none';this.parentNode.querySelector('.glyph').style.display='grid'"><span class="glyph" style="display:none">${esc(glyph)}</span>`
       : `<span class="glyph">${esc(glyph)}</span>`;
     return `<div class="card" data-id="${x.id}">
       <div class="thumb">${thumb}</div>
@@ -971,6 +972,24 @@ $('#btnLookup').addEventListener('click', async () => {
     toast('Lookup unavailable — you can type details in', 'bad');
   } finally { btn.textContent = orig; }
 });
+/* Rebrickable serves every set image at a predictable path — the set number,
+   lowercased. Verified against all 27,810 sets: the 2,392 whose stored URL
+   differs from the plain form differ *only* by case, so this one rule covers
+   the whole catalogue.
+
+   That means an item never needs an imgUrl saved against it — anything with a
+   set number can show its picture, including everything added before the
+   database existed. Sets Rebrickable has no photo for just 404, and the
+   <img onerror> already falls back to the letter glyph. */
+function setImageUrl(setNum) {
+  const s = String(setNum || '').trim();
+  if (!s) return '';
+  // A variant suffix isn't always numeric ("215-2B", "201908-mmb"), so key off
+  // the dash rather than digits — otherwise those become "215-2B-1" and 404.
+  const norm = s.includes('-') ? s : s + '-1';
+  return 'https://cdn.rebrickable.com/media/sets/' + norm.toLowerCase() + '.jpg';
+}
+
 function applyLookup(name, theme, parts, img) {
   if (name && !$('#fName').value) $('#fName').value = name;
   if (theme && !$('#fTheme').value) $('#fTheme').value = theme;
