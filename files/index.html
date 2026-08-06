@@ -385,8 +385,11 @@
     <div class="field">
       <label><input id="fUnresolved" type="checkbox" /> Mark as unresolved — couldn’t identify this barcode yet</label>
     </div>
+    <button class="btn ghost small" id="btnIdentify" style="margin-bottom:8px">
+      Identify from barcode
+    </button>
     <button class="btn ghost small" id="btnLookup" style="margin-bottom:14px">
-      Look up details online (optional)
+      Look up details from set number
     </button>
     <button class="btn primary" id="btnSave">Save to ledger</button>
     <button class="btn danger small" id="btnDelete" style="margin-top:10px; display:none">Remove from ledger</button>
@@ -878,6 +881,58 @@ async function lookupGenericBarcode(code) {
   }
   return null;
 }
+
+/* Re-run identification for an item already in the ledger. Items saved before
+   the barcode database existed have a barcode but no set number — this fills
+   them in without needing to re-scan the box.
+
+   Only ever fills blanks. An exact database hit that disagrees with something
+   you already typed is reported rather than applied, so nothing you entered by
+   hand is silently overwritten. */
+$('#btnIdentify').addEventListener('click', async () => {
+  const code = $('#fBarcode').value.trim();
+  if (!code) { toast('No barcode on this item to identify', 'bad'); return; }
+  if (!navigator.onLine) { toast('You’re offline — try when connected', 'bad'); return; }
+
+  const btn = $('#btnIdentify'); const orig = btn.textContent;
+  btn.textContent = 'Identifying…'; btn.disabled = true;
+  try {
+    const found = await lookupBarcodeOnline(code);
+    if (!found) {
+      setResolvedNote({ warn: true, icon: '＋',
+        text: 'Still not in the database. Type the set number from the box and save — '
+            + 'that teaches it for every device.' });
+      toast('No match for that barcode', 'bad');
+      return;
+    }
+
+    const filled = [];
+    const conflicts = [];
+    const put = (sel, val, label) => {
+      if (!val) return;
+      const el = $(sel);
+      if (!el.value.trim()) { el.value = val; filled.push(label); }
+      else if (el.value.trim() !== String(val)) conflicts.push(`${label}: “${el.value.trim()}” vs “${val}”`);
+    };
+    put('#fSet', found.setNum, 'set number');
+    put('#fName', found.name, 'name');
+    put('#fTheme', found.theme, 'theme');
+    if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
+    if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
+    if (found.setNum) $('#fUnresolved').checked = false;
+
+    let text = `Identified via ${found.source}`;
+    if (filled.length) text += ` · filled ${filled.join(', ')}`;
+    else text += ' · everything was already filled in';
+    if (conflicts.length) text += ` · kept yours — ${conflicts.join('; ')}`;
+    setResolvedNote({ icon: '✓', warn: conflicts.length > 0, text });
+    toast(filled.length ? 'Details filled — review and save' : 'Already up to date', 'good');
+  } catch (e) {
+    toast('Lookup failed — try again', 'bad');
+  } finally {
+    btn.textContent = orig; btn.disabled = false;
+  }
+});
 
 /* ---------- online lookup (optional, best-effort) ---------- */
 $('#btnLookup').addEventListener('click', async () => {
