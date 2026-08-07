@@ -208,6 +208,11 @@
   .btn.danger{background:transparent; border:1px solid rgba(224,86,63,.4); color:var(--red);}
   .btn.small{font-size:13.5px; padding:11px; font-family:var(--body); font-weight:600;}
   .btn-row{display:flex; gap:10px; margin-top:6px;}
+  .chips{display:flex; flex-wrap:wrap; gap:8px;}
+  .chip{background:var(--surface); border:1px solid var(--line); color:var(--text);
+    border-radius:999px; padding:9px 13px; font-size:13px; font-family:var(--body); font-weight:600;}
+  .chip.on{background:rgba(242,184,56,.14); border-color:var(--gold-deep); color:var(--gold-soft);}
+  .sortbtn.active{border-color:var(--gold-deep); color:var(--gold-soft);}
 
   .resolved{display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:12px;
     background:rgba(95,184,120,.1); border:1px solid rgba(95,184,120,.28); margin-bottom:14px;
@@ -285,9 +290,9 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
       <span id="sortLabel">Recent</span>
     </button>
-    <button class="sortbtn" id="btnFilterUnresolved" style="white-space:nowrap;">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
-      <span id="filterLabel">All</span>
+    <button class="sortbtn" id="btnFilter" style="white-space:nowrap;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h18M6 12h12M10 19h4"/></svg>
+      <span id="filterLabel">Filter</span>
     </button>
   </div>
 
@@ -396,6 +401,72 @@
   </div>
 </div>
 
+<!-- Filter sheet -->
+<div class="sheet" id="filterSheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <h3>Filter ledger</h3>
+    <button class="x" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="row2">
+      <div class="field">
+        <label>Box / location</label>
+        <select id="fltBox"></select>
+      </div>
+      <div class="field">
+        <label>Theme</label>
+        <select id="fltTheme"></select>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Status</label>
+        <select id="fltStatus">
+          <option value="">Any</option>
+          <option value="unresolved">Unresolved only</option>
+          <option value="resolved">Identified only</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Quantity</label>
+        <select id="fltQty">
+          <option value="">Any</option>
+          <option value="dupes">Duplicates (2+)</option>
+          <option value="one">Single (1)</option>
+          <option value="zero">None (0)</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Pieces</label>
+      <select id="fltPieces">
+        <option value="">Any size</option>
+        <option value="0-99">Under 100</option>
+        <option value="100-499">100 – 499</option>
+        <option value="500-999">500 – 999</option>
+        <option value="1000-999999">1000+</option>
+        <option value="unknown">Piece count unknown</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Needs attention</label>
+      <div class="chips" id="fltMissing">
+        <button type="button" class="chip" data-missing="setNum">No set number</button>
+        <button type="button" class="chip" data-missing="imgUrl">No photo</button>
+        <button type="button" class="chip" data-missing="barcode">No barcode</button>
+        <button type="button" class="chip" data-missing="theme">No theme</button>
+        <button type="button" class="chip" data-missing="price">No value</button>
+      </div>
+      <p class="hint">Shows items missing <em>any</em> of the selected fields.</p>
+    </div>
+    <div class="btn-row">
+      <button class="btn ghost small" id="fltClear">Clear all</button>
+      <button class="btn primary small" id="fltDone">Show <span id="fltCount">0</span></button>
+    </div>
+  </div>
+</div>
+
 <!-- Settings sheet -->
 <div class="sheet" id="settingsSheet" aria-hidden="true">
   <div class="grip"></div>
@@ -493,7 +564,7 @@ const DB = (() => {
 /* ---------- state ---------- */
 let items = [];
 let sortMode = 'recent';
-let showUnresolvedOnly = false;
+let filters = { box: '', theme: '', status: '', qty: '', pieces: '', missing: [] };
 let editingId = null;
 let activeBox = null;
 const SORTS = ['recent', 'name', 'qty'];
@@ -525,6 +596,46 @@ function computeStats() {
   }
 }
 
+/* A missing photo means "nothing to show" — an item with a set number can
+   always derive one, so it isn't really missing. Mirrors the list rendering. */
+function isBlank(x, field) {
+  if (field === 'imgUrl') return !(x.imgUrl || setImageUrl(x.setNum));
+  return !String(x[field] ?? '').trim();
+}
+
+function matchesFilters(x) {
+  if (filters.box === '__none__') { if (x.boxId) return false; }
+  else if (filters.box && String(x.boxId || '') !== filters.box) return false;
+
+  if (filters.theme === '__none__') { if (x.theme) return false; }
+  else if (filters.theme && (x.theme || '') !== filters.theme) return false;
+
+  if (filters.status === 'unresolved' && !x.unresolved) return false;
+  if (filters.status === 'resolved' && x.unresolved) return false;
+
+  const q = x.qty || 0;
+  if (filters.qty === 'dupes' && q < 2) return false;
+  if (filters.qty === 'one' && q !== 1) return false;
+  if (filters.qty === 'zero' && q !== 0) return false;
+
+  if (filters.pieces === 'unknown') { if (x.numParts) return false; }
+  else if (filters.pieces) {
+    const [lo, hi] = filters.pieces.split('-').map(Number);
+    const n = x.numParts || 0;
+    if (!n || n < lo || n > hi) return false;
+  }
+
+  // "any of", not "all of" — this is a to-do list, not an intersection
+  if (filters.missing.length && !filters.missing.some(f => isBlank(x, f))) return false;
+
+  return true;
+}
+
+function activeFilterCount() {
+  return ['box', 'theme', 'status', 'qty', 'pieces'].filter(k => filters[k]).length
+    + filters.missing.length;
+}
+
 function currentView() {
   const q = $('#search').value.trim().toLowerCase();
   let v = items.filter(x =>
@@ -532,9 +643,11 @@ function currentView() {
     (x.name || '').toLowerCase().includes(q) ||
     (x.setNum || '').toLowerCase().includes(q) ||
     (x.barcode || '').toLowerCase().includes(q) ||
-    (x.theme || '').toLowerCase().includes(q)
+    (x.theme || '').toLowerCase().includes(q) ||
+    (x.note || '').toLowerCase().includes(q) ||
+    (x.boxId ? 'box:' + x.boxId : '').toLowerCase().includes(q)
   );
-  if (showUnresolvedOnly) v = v.filter(x => x.unresolved);
+  v = v.filter(matchesFilters);
   if (sortMode === 'name') v.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   else if (sortMode === 'qty') v.sort((a, b) => (b.qty || 0) - (a.qty || 0));
   else v.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -545,13 +658,26 @@ function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 
 function render() {
   computeStats();
+  updateFilterLabel();
   const view = currentView();
   const list = $('#list');
   $('#empty').style.display = items.length === 0 ? '' : 'none';
   $('#statShown').textContent = items.length && view.length !== items.length ? `${view.length} shown` : '';
 
   if (items.length && view.length === 0) {
-    list.innerHTML = `<div class="empty" style="padding:30px"><h2 style="font-size:18px">No matches</h2><p>Nothing here matches your search.</p></div>`;
+    // Say which of the two is hiding things, so the way out is obvious.
+    const nFilters = activeFilterCount();
+    const searching = !!$('#search').value.trim();
+    const why = nFilters && searching ? 'your search and filters'
+      : nFilters ? `${nFilters} active filter${nFilters === 1 ? '' : 's'}`
+      : 'your search';
+    list.innerHTML = `<div class="empty" style="padding:30px">
+      <h2 style="font-size:18px">No matches</h2>
+      <p>Nothing matches ${why}.</p>
+      ${nFilters ? '<button class="btn ghost small" id="emptyClear" style="margin-top:12px">Clear filters</button>' : ''}
+    </div>`;
+    const ec = $('#emptyClear');
+    if (ec) ec.addEventListener('click', () => $('#fltClear').click());
     return;
   }
 
@@ -1094,12 +1220,81 @@ $('#btnSort').addEventListener('click', () => {
   $('#sortLabel').textContent = SORT_LABELS[sortMode];
   render();
 });
-$('#btnFilterUnresolved').addEventListener('click', () => {
-  showUnresolvedOnly = !showUnresolvedOnly;
-  $('#filterLabel').textContent = showUnresolvedOnly ? 'Unresolved' : 'All';
-  $('#btnFilterUnresolved').classList.toggle('active', showUnresolvedOnly);
+/* ---------- filtering ----------
+   Box and theme options are rebuilt from whatever is actually in the ledger
+   each time the sheet opens, so you can only pick a filter that has results —
+   no dead options, and new boxes appear without any extra bookkeeping. */
+function fillSelect(sel, values, allLabel, noneLabel, current) {
+  const opts = [`<option value="">${allLabel}</option>`];
+  if (noneLabel) opts.push(`<option value="__none__">${noneLabel}</option>`);
+  for (const [val, count] of values) {
+    opts.push(`<option value="${esc(val)}">${esc(val)} (${count})</option>`);
+  }
+  sel.innerHTML = opts.join('');
+  sel.value = current;
+  if (sel.value !== current) sel.value = '';   // the old choice no longer exists
+}
+
+function tally(getter) {
+  const m = new Map();
+  for (const x of items) {
+    const v = String(getter(x) ?? '').trim();
+    if (v) m.set(v, (m.get(v) || 0) + 1);
+  }
+  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+}
+
+function syncFilterSheet() {
+  fillSelect($('#fltBox'), tally(x => x.boxId), 'Any box', 'Not in a box', filters.box);
+  fillSelect($('#fltTheme'), tally(x => x.theme), 'Any theme', 'No theme set', filters.theme);
+  $('#fltStatus').value = filters.status;
+  $('#fltQty').value = filters.qty;
+  $('#fltPieces').value = filters.pieces;
+  $$('#fltMissing .chip').forEach(c =>
+    c.classList.toggle('on', filters.missing.includes(c.dataset.missing)));
+  // keep state honest if a select silently reset because its option vanished
+  filters.box = $('#fltBox').value;
+  filters.theme = $('#fltTheme').value;
+  updateFilterLabel();
+}
+
+function updateFilterLabel() {
+  const n = activeFilterCount();
+  const shown = items.filter(matchesFilters).length;
+  $('#fltCount').textContent = `${shown} item${shown === 1 ? '' : 's'}`;
+  $('#filterLabel').textContent = n ? `Filter · ${n}` : 'Filter';
+  $('#btnFilter').classList.toggle('active', n > 0);
+}
+
+$('#btnFilter').addEventListener('click', () => { syncFilterSheet(); openSheet($('#filterSheet')); });
+
+['fltBox', 'fltTheme', 'fltStatus', 'fltQty', 'fltPieces'].forEach(id => {
+  $('#' + id).addEventListener('change', e => {
+    filters[id.replace('flt', '').toLowerCase()] = e.target.value;
+    render();
+    updateFilterLabel();
+  });
+});
+
+$('#fltMissing').addEventListener('click', e => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  const f = chip.dataset.missing;
+  filters.missing = filters.missing.includes(f)
+    ? filters.missing.filter(v => v !== f)
+    : [...filters.missing, f];
+  chip.classList.toggle('on', filters.missing.includes(f));
+  render();
+  updateFilterLabel();
+});
+
+$('#fltClear').addEventListener('click', () => {
+  filters = { box: '', theme: '', status: '', qty: '', pieces: '', missing: [] };
+  syncFilterSheet();
   render();
 });
+
+$('#fltDone').addEventListener('click', closeSheets);
 $('#search').addEventListener('input', render);
 
 /* ---------- settings ---------- */
