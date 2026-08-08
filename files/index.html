@@ -385,6 +385,7 @@
       <div class="field">
         <label>Value each <span style="text-transform:none;color:var(--faint)">(optional)</span></label>
         <input id="fPrice" class="mono" type="text" inputmode="decimal" placeholder="129.99" />
+        <p class="hint" id="msrpHint"></p>
       </div>
     </div>
     <div class="field">
@@ -416,6 +417,23 @@
     </button>
     <button class="btn primary" id="btnSave">Save to ledger</button>
     <button class="btn danger small" id="btnDelete" style="margin-top:10px; display:none">Remove from ledger</button>
+  </div>
+</div>
+
+<!-- Sort sheet -->
+<div class="sheet" id="sortSheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <h3>Sort by</h3>
+    <button class="x" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="set-group" id="sortOptions"></div>
+    <div class="field" style="margin-top:14px">
+      <label>Direction</label>
+      <div class="chips" id="sortDir"></div>
+    </div>
+    <button class="btn primary small" id="sortDone" style="margin-top:14px">Done</button>
   </div>
 </div>
 
@@ -591,8 +609,22 @@ let sortMode = 'recent';
 let filters = { box: '', theme: '', status: '', qty: '', pieces: '', missing: [] };
 let editingId = null;
 let activeBox = null;
-const SORTS = ['recent', 'name', 'qty'];
-const SORT_LABELS = { recent: 'Recent', name: 'A–Z', qty: 'Quantity' };
+/* Each sort names its own directions, because "ascending" means nothing on its
+   own — you want "A–Z" for a name and "Largest first" for a piece count. */
+const money = v => Number(String(v ?? '').replace(/[^\d.]/g, '')) || 0;
+const SORTS = {
+  recent: { label: 'Recently updated', hint: 'When you last changed it', type: 'num', get: x => x.updatedAt || 0, asc: 'Oldest first', desc: 'Newest first' },
+  added:  { label: 'Date added',       hint: 'When it entered the ledger', type: 'num', get: x => x.createdAt || 0, asc: 'Oldest first', desc: 'Newest first' },
+  name:   { label: 'Name',             hint: '', type: 'str', get: x => x.name || '', asc: 'A–Z', desc: 'Z–A' },
+  setNum: { label: 'Set number',       hint: '', type: 'str', get: x => x.setNum || '', asc: 'Low to high', desc: 'High to low' },
+  theme:  { label: 'Theme',            hint: '', type: 'str', get: x => x.theme || '', asc: 'A–Z', desc: 'Z–A' },
+  boxId:  { label: 'Box / location',   hint: '', type: 'str', get: x => x.boxId || '', asc: 'A–Z', desc: 'Z–A' },
+  qty:    { label: 'Quantity owned',   hint: '', type: 'num', get: x => x.qty || 0, asc: 'Fewest first', desc: 'Most first' },
+  pieces: { label: 'Piece count',      hint: '', type: 'num', get: x => x.numParts || 0, asc: 'Smallest first', desc: 'Largest first' },
+  msrp:   { label: 'MSRP',             hint: 'Original retail price', type: 'num', get: x => money(x.msrp), asc: 'Cheapest first', desc: 'Priciest first' },
+  value:  { label: 'Your value',       hint: 'What you recorded', type: 'num', get: x => money(x.price), asc: 'Lowest first', desc: 'Highest first' },
+};
+let sortDir = 'desc';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 /* ---------- toast ---------- */
@@ -672,10 +704,25 @@ function currentView() {
     (x.boxId ? 'box:' + x.boxId : '').toLowerCase().includes(q)
   );
   v = v.filter(matchesFilters);
-  if (sortMode === 'name') v.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  else if (sortMode === 'qty') v.sort((a, b) => (b.qty || 0) - (a.qty || 0));
-  else v.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  return v;
+  return sortItems(v);
+}
+
+function sortItems(v) {
+  const s = SORTS[sortMode] || SORTS.recent;
+  const sign = sortDir === 'asc' ? 1 : -1;
+  return v.sort((a, b) => {
+    const av = s.get(a), bv = s.get(b);
+    /* Blanks sink to the bottom in both directions — an item with no theme
+       isn't "first alphabetically", it's just missing, and burying it under
+       everything you do have is never what you wanted. */
+    const aEmpty = av === '' || av === 0, bEmpty = bv === '' || bv === 0;
+    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+    const cmp = s.type === 'str'
+      ? String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
+      : av - bv;
+    // name breaks ties so equal values don't shuffle between renders
+    return cmp * sign || (a.name || '').localeCompare(b.name || '');
+  });
 }
 
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -719,6 +766,7 @@ function render() {
           ${x.setNum ? `<span class="tag set">#${esc(x.setNum)}</span>` : ''}
           ${x.theme ? `<span class="tag">${esc(x.theme)}</span>` : ''}
           ${x.numParts ? `<span class="tag">${x.numParts} pcs</span>` : ''}
+          ${x.msrp ? `<span class="tag" title="Original retail price">MSRP $${esc(String(x.msrp))}</span>` : ''}
           ${x.boxId ? `<span class="tag">box:${esc(x.boxId)}</span>` : ''}
           ${x.price ? `<span class="tag" style="color:#bfe6cb; border-color:rgba(95,184,120,.3)">${esc(String(x.price))}</span>` : ''}
           ${x.unresolved ? `<span class="tag" style="color:var(--gold-soft); border-color:rgba(242,184,56,.3)">Unresolved</span>` : ''}
@@ -788,9 +836,11 @@ function openEditor(item, resolvedNote) {
   const rb = $('#resolvedBox');
   rb.innerHTML = resolvedNote
     ? `<div class="resolved ${resolvedNote.warn ? 'warn' : ''}">${resolvedNote.icon || '✓'} ${resolvedNote.text}</div>` : '';
-  // stash image/parts on the form element
+  // stash image/parts/msrp on the form element
   $('#editSheet').dataset.img = item?.imgUrl || '';
   $('#editSheet').dataset.parts = item?.numParts || '';
+  $('#editSheet').dataset.msrp = item?.msrp || '';
+  showMsrpHint();
   $('#fUnresolved').checked = item?.unresolved || false;
   openSheet($('#editSheet'));
   if (!editingId && !item?.name) setTimeout(() => $('#fName').focus(), 320);
@@ -816,6 +866,7 @@ async function save() {
     note: $('#fNote').value.trim(),
     imgUrl: $('#editSheet').dataset.img || it.imgUrl || '',
     numParts: +($('#editSheet').dataset.parts) || it.numParts || 0,
+    msrp: +($('#editSheet').dataset.msrp) || it.msrp || 0,
     unresolved: $('#fUnresolved').checked,
     /* The box comes from the field, never from the global active box. The
        active box only ever seeds it for a NEW item (see openEditor) — it used
@@ -900,6 +951,7 @@ async function resolveBarcode(code) {
     if (found.note && !$('#fNote').value) $('#fNote').value = found.note;
     if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
     if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
+    if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; showMsrpHint(); }
     setResolvedNote({ icon: '✓',
       text: `Identified via ${found.source}${found.setNum ? ' · set ' + found.setNum : ''}. Check the details and save.` });
   } else {
@@ -1084,6 +1136,7 @@ $('#btnIdentify').addEventListener('click', async () => {
     put('#fTheme', found.theme, 'theme');
     if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
     if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
+    if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; showMsrpHint(); }
     if (found.setNum) $('#fUnresolved').checked = false;
 
     let text = `Identified via ${found.source}`;
@@ -1152,6 +1205,20 @@ function setImageUrl(setNum) {
   // the dash rather than digits — otherwise those become "215-2B-1" and 404.
   const norm = s.includes('-') ? s : s + '-1';
   return 'https://cdn.rebrickable.com/media/sets/' + norm.toLowerCase() + '.jpg';
+}
+
+/* MSRP is the set's launch retail price and belongs to the set, not to you —
+   so it's shown next to "Value each" rather than written into it, with a tap
+   to copy it across if that's what you want the item valued at. */
+function showMsrpHint() {
+  const m = $('#editSheet').dataset.msrp;
+  const el = $('#msrpHint');
+  if (!m) { el.innerHTML = ''; return; }
+  el.innerHTML = `MSRP $${esc(String(m))} · <a href="#" id="useMsrp" style="color:var(--gold-soft)">use this</a>`;
+  $('#useMsrp').addEventListener('click', e => {
+    e.preventDefault();
+    $('#fPrice').value = m;
+  });
 }
 
 function applyLookup(name, theme, parts, img) {
@@ -1254,10 +1321,47 @@ $('#btnManualCode').addEventListener('click', () => {
 
 /* ---------- sort / search ---------- */
 $('#btnSort').addEventListener('click', () => {
-  sortMode = SORTS[(SORTS.indexOf(sortMode) + 1) % SORTS.length];
-  $('#sortLabel').textContent = SORT_LABELS[sortMode];
+  syncSortSheet();
+  openSheet($('#sortSheet'));
+});
+
+/* ---------- sorting ---------- */
+function syncSortSheet() {
+  $('#sortOptions').innerHTML = Object.entries(SORTS).map(([k, s]) => `
+    <div class="set-row tap" data-sort="${k}">
+      <div class="t"><b>${esc(s.label)}</b>${s.hint ? `<small>${esc(s.hint)}</small>` : ''}</div>
+      <span class="go">${k === sortMode ? '✓' : ''}</span>
+    </div>`).join('');
+
+  const s = SORTS[sortMode] || SORTS.recent;
+  $('#sortDir').innerHTML = ['desc', 'asc'].map(d =>
+    `<button type="button" class="chip${sortDir === d ? ' on' : ''}" data-dir="${d}">${esc(s[d])}</button>`
+  ).join('');
+  updateSortLabel();
+}
+
+function updateSortLabel() {
+  const s = SORTS[sortMode] || SORTS.recent;
+  $('#sortLabel').textContent = s.label + (sortDir === 'asc' ? ' ↑' : ' ↓');
+}
+
+$('#sortOptions').addEventListener('click', e => {
+  const row = e.target.closest('[data-sort]');
+  if (!row) return;
+  sortMode = row.dataset.sort;
+  syncSortSheet();
   render();
 });
+
+$('#sortDir').addEventListener('click', e => {
+  const c = e.target.closest('[data-dir]');
+  if (!c) return;
+  sortDir = c.dataset.dir;
+  syncSortSheet();
+  render();
+});
+
+$('#sortDone').addEventListener('click', closeSheets);
 /* ---------- filtering ----------
    Box and theme options are rebuilt from whatever is actually in the ledger
    each time the sheet opens, so you can only pick a filter that has results —
@@ -1626,6 +1730,7 @@ $('#boxPill').addEventListener('click', async () => {
   const ab = await DB.get('settings', 'activeBox');
   if (ab?.value) await setActiveBox(ab.value);
   netStatus();
+  updateSortLabel();
   render();
   if ('serviceWorker' in navigator) {
     try { await navigator.serviceWorker.register('sw.js'); } catch (e) {}

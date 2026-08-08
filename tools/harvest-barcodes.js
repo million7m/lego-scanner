@@ -46,6 +46,7 @@ const path = require('path');
 const DATA = path.join(__dirname, '..', 'data');
 const SETS_FILE = path.join(DATA, 'sets.json');
 const BARCODES_FILE = path.join(DATA, 'barcodes.json');
+const PRICES_FILE = path.join(DATA, 'prices.json');
 const STATE_FILE = path.join(DATA, 'harvest-state.json');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -66,6 +67,7 @@ const LIMIT = (() => {
 const DRY_RUN = args.includes('--dry-run');
 const RESET = args.includes('--reset');
 const RECHECK = args.includes('--recheck-missing');
+const PRICES = args.includes('--prices');
 const SINCE = (() => {
   const i = args.indexOf('--since');
   return i > -1 ? +args[i + 1] || 0 : 0;
@@ -76,13 +78,44 @@ const readJson = (f, fallback) => {
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fallback; }
 };
 
+function flatten(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&pound;/g, '£')
+    .replace(/&euro;/g, '€')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ');
+}
+
 /* Brickset renders the barcodes as a definition list; flattening tags first
    makes "UPC: 673419267656" match regardless of the surrounding markup. */
-function extractBarcodes(html) {
-  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+function extractBarcodes(flat) {
   const ean = flat.match(/EAN:\s*(\d{8,14})/i);
   const upc = flat.match(/UPC:\s*(\d{8,14})/i);
   return { ean: ean?.[1] || '', upc: upc?.[1] || '' };
+}
+
+/* Launch RRP, as "RRP £474.99, $549.99, €549.99".
+
+   Two traps on the same page: a second "RRP (inflated)" line giving today's
+   inflation-adjusted figure, and a "Current value" line giving resale prices.
+   Neither is the MSRP. Anchoring on the first RRP and cutting the segment at
+   any of those labels keeps them out — splitting on /RRP/ also terminates at
+   "RRP (inflated)" itself. */
+function extractPrices(flat) {
+  const i = flat.search(/\bRRP\b/);
+  if (i < 0) return null;
+  const seg = flat.slice(i + 3, i + 83).split(/RRP|Current value|Price per piece|Age range|Packaging|Barcodes/)[0];
+  const num = sym => {
+    const m = seg.match(new RegExp('\\' + sym + '\\s?([\\d,]+(?:\\.\\d+)?)'));
+    if (!m) return 0;
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  };
+  const usd = num('$'), gbp = num('£'), eur = num('€');
+  return (usd || gbp || eur) ? { usd, gbp, eur } : null;
 }
 
 function fmtDuration(ms) {
@@ -104,8 +137,14 @@ function fmtDuration(ms) {
 
   const sets = readJson(SETS_FILE, {});
   const barcodes = readJson(BARCODES_FILE, {});
+  const prices = readJson(PRICES_FILE, {});
   const state = readJson(STATE_FILE, { done: [], stats: { found: 0, none: 0, failed: 0 } });
   const done = new Set(state.done);
+  /* Prices are tracked separately from barcodes: the barcode pass finished
+     before prices were being collected, so "visited for a barcode" says
+     nothing about whether we looked for an RRP. Without its own list, sets
+     that genuinely have no RRP would be refetched on every single run. */
+  const pricesSeen = new Set(state.pricesDone || []);
 
   /* Rebrickable's catalog also carries non-set merchandise — Jibbitz, shoes,
      lunch bags, books — which have no parts, usually 404 on Brickset, and
@@ -134,8 +173,14 @@ function fmtDuration(ms) {
     ? Object.keys(sets).filter(sn => done.has(sn) && !setsWithBarcode.has(sn) && tier(sn) < 2)
     : [];
 
+  /* Price backfill: real sets we have never looked for an RRP on. Merchandise
+     is skipped for the same reason as barcodes — it has no launch RRP listed. */
+  const needPrice = PRICES
+    ? Object.keys(sets).filter(sn => !pricesSeen.has(sn) && tier(sn) < 2)
+    : [];
+
   const fresh = Object.keys(sets).filter(sn => !done.has(sn));
-  const queue = [...fresh, ...missing]
+  const queue = [...new Set([...fresh, ...missing, ...needPrice])]
     .filter(sn => !SINCE || (sets[sn][1] || 0) >= SINCE)
     .sort((a, b) => tier(a) - tier(b) || (sets[b][1] || 0) - (sets[a][1] || 0));
 
@@ -153,9 +198,13 @@ function fmtDuration(ms) {
   } else if (SINCE) {
     console.log(`Restricted to sets from ${SINCE} onward`);
   }
+  if (PRICES) {
+    console.log(`Price backfill: ${needPrice.length} sets never checked for an RRP`);
+  }
   console.log(`New sets queued: ${fresh.filter(sn => !SINCE || (sets[sn][1] || 0) >= SINCE).length}`);
   console.log(`This run: ${target}`);
   console.log(`Barcodes known: ${Object.keys(barcodes).length}`);
+  console.log(`Prices known: ${Object.keys(prices).length}`);
   if (!target) { console.log('\nNothing left to harvest.'); return; }
   console.log(`Estimated time at ${MIN_DELAY / 1000}s/set: ${fmtDuration(target * MIN_DELAY)}`);
   if (DRY_RUN) { console.log('\n--dry-run: queue sized, nothing fetched.'); return; }
@@ -167,12 +216,14 @@ function fmtDuration(ms) {
   const started = Date.now();
   /* state.stats is a lifetime tally across every run ever; these are scoped to
      this run, which is what you actually want to read at the end of one. */
-  const run = { found: 0, none: 0, failed: 0, filled: 0 };
+  const run = { found: 0, none: 0, failed: 0, filled: 0, priced: 0 };
 
   const save = () => {
     state.done = [...done];
+    state.pricesDone = [...pricesSeen];
     state.updatedAt = new Date().toISOString();
     fs.writeFileSync(BARCODES_FILE, JSON.stringify(barcodes));
+    fs.writeFileSync(PRICES_FILE, JSON.stringify(prices));
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
   };
 
@@ -216,7 +267,16 @@ function fmtDuration(ms) {
 
     processed++;
     if (html) {
-      const { ean, upc } = extractBarcodes(html);
+      const flat = flatten(html);
+
+      /* Always read the RRP off a page we've fetched anyway — even on a plain
+         barcode run. The page is already in hand; not parsing it would mean
+         another 12-hour crawl later to get it. */
+      const rrp = extractPrices(flat);
+      if (rrp) { prices[setNum] = [rrp.usd, rrp.gbp, rrp.eur]; run.priced++; }
+      pricesSeen.add(setNum);
+
+      const { ean, upc } = extractBarcodes(flat);
       const wasBlank = !setsWithBarcode.has(setNum);
       if (ean) barcodes[ean] = setNum;
       if (upc) barcodes[upc] = setNum;
@@ -255,6 +315,7 @@ function fmtDuration(ms) {
         `[${pct}%] ${processed}/${target} · barcodes ${Object.keys(barcodes).length} · ` +
         `found ${run.found} none ${run.none} failed ${run.failed}` +
         (RECHECK ? ` filled ${run.filled}` : '') +
+        ` · prices ${Object.keys(prices).length}` +
         ` · ${delay}ms · ETA ${fmtDuration(left * rate)}`
       );
     }

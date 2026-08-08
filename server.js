@@ -52,7 +52,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 const CONTRIB_FILE = path.join(DATA_DIR, 'contributed.json');
 const IMG_PREFIX = 'https://cdn.rebrickable.com/media/sets/';
 
-const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map() };
+const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map(), prices: new Map() };
 
 function loadJsonFile(name) {
   try {
@@ -67,11 +67,13 @@ function loadDb() {
   const barcodes = loadJsonFile('barcodes.json') || {};
   const sets = loadJsonFile('sets.json') || {};
   const contributed = loadJsonFile('contributed.json') || {};
+  const prices = loadJsonFile('prices.json') || {};
   DB.barcodes = new Map(Object.entries(barcodes));
   DB.sets = new Map(Object.entries(sets));
   DB.contributed = new Map(Object.entries(contributed));
+  DB.prices = new Map(Object.entries(prices));
   console.log(`Local DB: ${DB.barcodes.size} harvested barcodes, ${DB.sets.size} sets, ` +
-    `${DB.contributed.size} contributed`);
+    `${DB.prices.size} prices, ${DB.contributed.size} contributed`);
   if (!DB.barcodes.size) {
     console.warn('  No barcodes.json yet — run tools/build-sets.js then tools/harvest-barcodes.js');
   }
@@ -92,6 +94,18 @@ function codeVariants(code) {
   return [...out].filter(Boolean);
 }
 
+/* Launch RRP, harvested from Brickset. Stored compactly as [usd, gbp, eur];
+   0 means that currency wasn't listed, which is not the same as free. */
+function msrpFor(setNum) {
+  const row = DB.prices.get(setNum);
+  if (!row) return {};
+  const [usd, gbp, eur] = row;
+  const out = {};
+  if (usd) out.msrp = usd;                       // the app displays USD
+  if (usd || gbp || eur) out.msrpAll = { usd: usd || undefined, gbp: gbp || undefined, eur: eur || undefined };
+  return out;
+}
+
 function setDetails(setNum) {
   const row = DB.sets.get(setNum);
   if (!row) return { setNum };
@@ -107,6 +121,7 @@ function setDetails(setNum) {
        all 27,810 sets, every stored override differs from the plain form only
        by case, so deriving covers rows that have no override too. */
     imgUrl: img || IMG_PREFIX + setNum.toLowerCase() + '.jpg',
+    ...msrpFor(setNum),
   };
 }
 

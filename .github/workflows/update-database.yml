@@ -1,0 +1,93 @@
+# Routine database refresh.
+#
+# Rebuilds the set list from Rebrickable's keyless CSVs, then harvests
+# barcodes and RRPs for anything new. Because the harvester only fetches set
+# numbers it has never seen, a week of new LEGO releases is a few hundred
+# pages, not the full 27k — minutes, not the ~19h of a cold run.
+#
+# Committing the refreshed data is what deploys it: Render redeploys on every
+# push to main. If nothing changed, nothing is committed and nothing deploys.
+name: Update barcode database
+
+on:
+  schedule:
+    # 04:20 UTC every Monday. Off the hour on purpose — scheduled jobs pile up
+    # on the hour and GitHub delays them under load.
+    - cron: '20 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      recheck_missing:
+        description: 'Also revisit sets that still have no barcode (slow)'
+        type: boolean
+        default: false
+
+# Never let two runs harvest and commit at once.
+concurrency:
+  group: update-database
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    # A cold run would be ~19h; this is only ever a top-up, but the cap stops a
+    # runaway job burning Actions minutes.
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The resume list decides what gets fetched, and .gitignore keeps it out
+      # of the repo, so it has to survive between runs or every run would
+      # re-harvest all 27,810 sets from scratch.
+      - name: Restore harvest state
+        uses: actions/cache@v4
+        with:
+          path: data/harvest-state.json
+          key: harvest-state-${{ github.run_id }}
+          restore-keys: harvest-state-
+
+      - name: Rebuild set list from Rebrickable
+        run: node tools/build-sets.js
+
+      - name: Harvest new sets
+        run: node tools/harvest-barcodes.js --prices
+
+      - name: Revisit sets still missing a barcode
+        if: inputs.recheck_missing
+        run: node tools/harvest-barcodes.js --recheck-missing --since 2000
+
+      - name: Report what changed
+        id: diff
+        run: |
+          git add -A data
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No new barcodes or prices this week."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            node -e "
+              const b = require('./data/barcodes.json');
+              const p = require('./data/prices.json');
+              const s = require('./data/sets.json');
+              console.log('sets:', Object.keys(s).length);
+              console.log('barcodes:', Object.keys(b).length);
+              console.log('prices:', Object.keys(p).length);
+            " | tee summary.txt
+          fi
+
+      - name: Commit and deploy
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Weekly database refresh
+
+          $(cat summary.txt)"
+          git push
