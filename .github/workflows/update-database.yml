@@ -43,33 +43,28 @@ jobs:
         with:
           node-version: '20'
 
-      # The resume list decides what gets fetched, and .gitignore keeps it out
-      # of the repo, so it has to survive between runs or every run would
-      # re-harvest all 27,810 sets from scratch.
-      - name: Restore harvest state
-        uses: actions/cache@v4
-        with:
-          path: data/harvest-state.json
-          key: harvest-state-${{ github.run_id }}
-          restore-keys: harvest-state-
-
       - name: Rebuild set list from Rebrickable
         run: node tools/build-sets.js
 
+      # --limit bounds the run so it can never overrun the job timeout, even if
+      # a backlog builds up after a few skipped weeks. Whatever is left is
+      # simply picked up next time, because the resume list is committed.
       - name: Harvest new sets
-        run: node tools/harvest-barcodes.js --prices
+        run: node tools/harvest-barcodes.js --prices --limit 3000
 
       - name: Revisit sets still missing a barcode
         if: inputs.recheck_missing
-        run: node tools/harvest-barcodes.js --recheck-missing --since 2000
+        run: node tools/harvest-barcodes.js --recheck-missing --since 2000 --limit 3000
 
+      # harvest-state.json carries a timestamp, so it differs on every run even
+      # when nothing was found. Decide on the files the app actually serves,
+      # otherwise this would commit and redeploy every week for nothing.
       - name: Report what changed
         id: diff
         run: |
-          git add -A data
-          if git diff --cached --quiet; then
+          if git diff --quiet -- data/sets.json data/barcodes.json data/prices.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No new barcodes or prices this week."
+            echo "No new sets, barcodes or prices this week."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             node -e "
@@ -87,6 +82,8 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # state file included so the next run knows where this one stopped
+          git add data/sets.json data/barcodes.json data/prices.json data/harvest-state.json
           git commit -m "Weekly database refresh
 
           $(cat summary.txt)"

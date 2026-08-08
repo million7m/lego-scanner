@@ -14,7 +14,10 @@ regenerate_ssh_key.ps1
 root.html
 tmp_*
 
-# harvester working files. data/sets.json, data/barcodes.json and
-# data/contributed.json ARE committed — they're what the app serves.
+# Only the downloaded Rebrickable archives are throwaway. sets.json,
+# barcodes.json, prices.json and contributed.json are what the app serves, and
+# harvest-state.json is the resume list — the scheduled refresh depends on it
+# to know what it has already fetched, so it has to be in the repo. Caching it
+# in CI is not enough: GitHub evicts caches after 7 days unused and the refresh
+# runs weekly, so a miss would restart the whole 19h crawl.
 data/cache/
-data/harvest-state.json
