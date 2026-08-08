@@ -212,6 +212,13 @@
   .chip{background:var(--surface); border:1px solid var(--line); color:var(--text);
     border-radius:999px; padding:9px 13px; font-size:13px; font-family:var(--body); font-weight:600;}
   .chip.on{background:rgba(242,184,56,.14); border-color:var(--gold-deep); color:var(--gold-soft);}
+  .chip .n{color:var(--faint); font-weight:600; margin-left:5px;}
+  .chip.on .n{color:inherit; opacity:.7;}
+  .searchhelp{background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:12px 14px; margin:0 14px 10px;}
+  .searchhelp .lede{font-size:12.5px; color:var(--faint); margin:0 0 10px;}
+  .searchhelp .grouplabel{font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--faint); margin:10px 0 7px;}
   .sortbtn.active{border-color:var(--gold-deep); color:var(--gold-soft);}
 
   .resolved{display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:12px;
@@ -284,7 +291,7 @@
   <div class="toolbar">
     <label class="search">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-      <input id="search" type="search" placeholder="Search name, set #, or barcode" autocomplete="off" />
+      <input id="search" type="search" placeholder="Search your ledger" autocomplete="off" />
     </label>
     <button class="sortbtn" id="btnSort">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
@@ -294,6 +301,11 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h18M6 12h12M10 19h4"/></svg>
       <span id="filterLabel">Filter</span>
     </button>
+  </div>
+
+  <div class="searchhelp" id="searchHelp" hidden>
+    <p class="lede">Searches name, set number, barcode, theme, note and box.</p>
+    <div id="searchChips"></div>
   </div>
 
   <div class="count-row">
@@ -1356,7 +1368,89 @@ $('#fltBulkBox').addEventListener('click', async () => {
   render();
   toast(`Moved ${view.length} item${view.length === 1 ? '' : 's'} to ${label}`, 'good');
 });
-$('#search').addEventListener('input', render);
+/* ---------- search discoverability ----------
+   Tapping the search box says what it looks in, and offers your actual boxes
+   and themes as one-tap shortcuts. The chips apply a *filter* rather than
+   typing text: exact, no spelling to guess, and it surfaces the filter sheet's
+   power at the moment you're wondering what you can search for.
+
+   It only appears while the field is focused and empty, so it teaches once and
+   then stays out of the way. */
+function buildSearchChips() {
+  const wrap = $('#searchChips');
+  const group = (label, chips) => chips.length
+    ? `<div class="grouplabel">${label}</div><div class="chips">${chips.join('')}</div>` : '';
+  const chip = (kind, val, text, count, on) =>
+    `<button type="button" class="chip${on ? ' on' : ''}" data-kind="${kind}" data-value="${esc(val)}">` +
+    `${esc(text)}<span class="n">${count}</span></button>`;
+
+  const top = (getter, n) => {
+    const m = new Map();
+    for (const x of items) {
+      const v = String(getter(x) ?? '').trim();
+      if (v) m.set(v, (m.get(v) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+  };
+
+  const boxes = top(x => x.boxId, 6).map(([v, c]) => chip('box', v, v, c, filters.box === v));
+  const noBox = items.filter(x => !x.boxId).length;
+  if (noBox) boxes.push(chip('box', '__none__', 'Not in a box', noBox, filters.box === '__none__'));
+
+  const themes = top(x => x.theme, 6).map(([v, c]) => chip('theme', v, v, c, filters.theme === v));
+
+  const needs = [];
+  const unresolved = items.filter(x => x.unresolved).length;
+  if (unresolved) needs.push(chip('status', 'unresolved', 'Unresolved', unresolved, filters.status === 'unresolved'));
+  const noSet = items.filter(x => !String(x.setNum ?? '').trim()).length;
+  if (noSet) needs.push(chip('missing', 'setNum', 'No set number', noSet, filters.missing.includes('setNum')));
+
+  wrap.innerHTML = group('Boxes', boxes) + group('Themes', themes) + group('Needs attention', needs)
+    || '<p class="lede" style="margin:0">Add a few sets and shortcuts to your boxes and themes will appear here.</p>';
+}
+
+function showSearchHelp(on) {
+  const el = $('#searchHelp');
+  if (on) buildSearchChips();
+  el.hidden = !on;
+}
+
+const searchHelpVisible = () => !$('#searchHelp').hidden;
+
+$('#search').addEventListener('focus', () => showSearchHelp(!$('#search').value.trim()));
+$('#search').addEventListener('input', () => {
+  showSearchHelp(!$('#search').value.trim() && document.activeElement === $('#search'));
+  render();
+});
+$('#search').addEventListener('keydown', e => { if (e.key === 'Escape') { e.target.blur(); showSearchHelp(false); } });
+
+/* Chips live outside the input, so a tap blurs it first — bind on pointerdown
+   and suppress the blur so the tap isn't lost. */
+$('#searchChips').addEventListener('pointerdown', e => {
+  if (e.target.closest('.chip')) e.preventDefault();
+});
+$('#searchChips').addEventListener('click', e => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  const { kind, value } = c.dataset;
+  if (kind === 'missing') {
+    filters.missing = filters.missing.includes(value)
+      ? filters.missing.filter(v => v !== value) : [...filters.missing, value];
+  } else {
+    filters[kind] = filters[kind] === value ? '' : value;   // tap again to undo
+  }
+  $('#search').value = '';
+  render();
+  buildSearchChips();
+});
+
+/* Dismiss when attention moves elsewhere — but not when the tap was inside the
+   panel or the search field itself. */
+document.addEventListener('pointerdown', e => {
+  if (!searchHelpVisible()) return;
+  if (e.target.closest('#searchHelp') || e.target.closest('.search')) return;
+  showSearchHelp(false);
+});
 
 /* ---------- settings ---------- */
 $('#btnSettings').addEventListener('click', async () => {
