@@ -376,6 +376,12 @@
       </div>
     </div>
     <div class="field">
+      <label>Box / location</label>
+      <input id="fBox" type="text" list="boxList" placeholder="e.g. Attic, Shelf 3" />
+      <datalist id="boxList"></datalist>
+      <p class="hint" id="boxHint"></p>
+    </div>
+    <div class="field">
       <label>Quantity owned</label>
       <div class="qty-big">
         <button id="qMinus" aria-label="Decrease">−</button>
@@ -385,7 +391,7 @@
     </div>
     <div class="field">
       <label>Note <span style="text-transform:none;color:var(--faint)">(optional — condition, location…)</span></label>
-      <textarea id="fNote" rows="2" placeholder="Sealed, in bin 4"></textarea>
+      <textarea id="fNote" rows="2" placeholder="Sealed, box a little crushed"></textarea>
     </div>
     <div class="field">
       <label><input id="fUnresolved" type="checkbox" /> Mark as unresolved — couldn’t identify this barcode yet</label>
@@ -463,6 +469,12 @@
     <div class="btn-row">
       <button class="btn ghost small" id="fltClear">Clear all</button>
       <button class="btn primary small" id="fltDone">Show <span id="fltCount">0</span></button>
+    </div>
+    <div class="set-group" style="margin-top:16px">
+      <div class="set-row tap" id="fltBulkBox">
+        <div class="t"><b>Move shown items to a box</b><small id="bulkBoxHint">Reassign everything currently listed</small></div>
+        <span class="go">›</span>
+      </div>
     </div>
   </div>
 </div>
@@ -750,6 +762,17 @@ function openEditor(item, resolvedNote) {
   $('#fQty').value = item?.qty ?? 1;
   $('#fNote').value = item?.note || '';
   $('#btnDelete').style.display = editingId ? '' : 'none';
+
+  /* An existing item keeps its own box. Only something brand new inherits the
+     active box, and we say so, so it's never a surprise where it landed. */
+  const ownBox = item?.boxId || '';
+  $('#fBox').value = editingId ? ownBox : (ownBox || activeBox || '');
+  $('#boxList').innerHTML = [...new Set(items.map(x => x.boxId).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
+    .map(b => `<option value="${esc(String(b))}"></option>`).join('');
+  $('#boxHint').textContent = !editingId && !ownBox && activeBox
+    ? `Filled from your active box (${activeBox}). Change it here if that's wrong.`
+    : '';
   const rb = $('#resolvedBox');
   rb.innerHTML = resolvedNote
     ? `<div class="resolved ${resolvedNote.warn ? 'warn' : ''}">${resolvedNote.icon || '✓'} ${resolvedNote.text}</div>` : '';
@@ -782,10 +805,13 @@ async function save() {
     imgUrl: $('#editSheet').dataset.img || it.imgUrl || '',
     numParts: +($('#editSheet').dataset.parts) || it.numParts || 0,
     unresolved: $('#fUnresolved').checked,
+    /* The box comes from the field, never from the global active box. The
+       active box only ever seeds it for a NEW item (see openEditor) — it used
+       to be forced on at save, which silently moved an existing item into
+       whatever box happened to be active while you edited it. */
+    boxId: $('#fBox').value.trim(),
     updatedAt: now,
   });
-  // If an active box is set, associate this item with that box
-  if (activeBox) it.boxId = activeBox;
   await DB.put('items', it);
   if (!editingId) items.push(it);
   // teach the barcode→set memory for instant future scans
@@ -1260,8 +1286,12 @@ function syncFilterSheet() {
 
 function updateFilterLabel() {
   const n = activeFilterCount();
-  const shown = items.filter(matchesFilters).length;
+  /* Must match what the bulk action operates on — currentView() also applies
+     the search box, so counting with matchesFilters alone would promise to
+     move more items than it actually would. */
+  const shown = currentView().length;
   $('#fltCount').textContent = `${shown} item${shown === 1 ? '' : 's'}`;
+  $('#bulkBoxHint').textContent = `Reassign the ${shown} item${shown === 1 ? '' : 's'} currently listed`;
   $('#filterLabel').textContent = n ? `Filter · ${n}` : 'Filter';
   $('#btnFilter').classList.toggle('active', n > 0);
 }
@@ -1295,6 +1325,37 @@ $('#fltClear').addEventListener('click', () => {
 });
 
 $('#fltDone').addEventListener('click', closeSheets);
+
+/* Bulk-reassign whatever the current filter is showing. Pairs with the box
+   filter: narrow to the items that ended up in the wrong box, then move them
+   all in one go rather than editing each. */
+$('#fltBulkBox').addEventListener('click', async () => {
+  const view = currentView();
+  if (!view.length) { toast('Nothing is currently shown', 'bad'); return; }
+
+  const boxes = [...new Set(items.map(x => x.boxId).filter(Boolean))].sort();
+  const target = prompt(
+    `Move ${view.length} shown item${view.length === 1 ? '' : 's'} to which box?\n` +
+    `Leave blank to remove them from any box.` +
+    (boxes.length ? `\n\nExisting boxes: ${boxes.join(', ')}` : ''),
+    ''
+  );
+  if (target === null) return;                       // cancelled
+  const box = target.trim();
+
+  const label = box ? `box "${box}"` : 'no box';
+  if (!confirm(`Move ${view.length} item${view.length === 1 ? '' : 's'} to ${label}?\n\nThis cannot be undone.`)) return;
+
+  const now = Date.now();
+  for (const x of view) {
+    x.boxId = box;
+    x.updatedAt = now;
+    await DB.put('items', x);
+  }
+  syncFilterSheet();
+  render();
+  toast(`Moved ${view.length} item${view.length === 1 ? '' : 's'} to ${label}`, 'good');
+});
 $('#search').addEventListener('input', render);
 
 /* ---------- settings ---------- */
