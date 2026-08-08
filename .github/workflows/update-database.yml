@@ -52,7 +52,24 @@ jobs:
       - name: Harvest new sets
         run: node tools/harvest-barcodes.js --prices --limit 3000
 
-      - name: Revisit sets still missing a barcode
+      # Catching new set numbers is only half the job. Brickset's barcodes are
+      # volunteer-contributed and land *after* a set is listed, so a set
+      # crawled the week it appears usually has no barcode yet -- and is then
+      # marked done and never looked at again. That is precisely the failure
+      # mode for recent releases: measured 19% of 2026 sets and 32% of 2025
+      # sets are visited-but-blank right now.
+      #
+      # So always revisit the last three years. Scoped that tightly it is only
+      # a few hundred pages (~25 min), unlike the full sweep below.
+      - name: Revisit recent sets still missing a barcode
+        run: |
+          SINCE=$(( $(date -u +%Y) - 2 ))
+          echo "Rechecking blanks from $SINCE onward"
+          node tools/harvest-barcodes.js --recheck-missing --since "$SINCE" --limit 1500
+
+      # The whole back catalogue, on request only -- hours of mostly empty
+      # requests, since pre-2000 boxes carried no retail barcode at all.
+      - name: Revisit all sets still missing a barcode
         if: inputs.recheck_missing
         run: node tools/harvest-barcodes.js --recheck-missing --since 2000 --limit 3000
 
