@@ -1,5 +1,5 @@
 /* Brick Ledger service worker — makes the app load offline */
-const CACHE = 'brickledger-v11';
+const CACHE = 'brickledger-v12';
 const SHELL = [
   './',
   './index.html',

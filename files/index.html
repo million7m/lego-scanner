@@ -875,8 +875,14 @@ async function save() {
     boxId: $('#fBox').value.trim(),
     updatedAt: now,
   });
-  await DB.put('items', it);
-  if (!editingId) items.push(it);
+  /* Typing "1,4" is a reasonable thing to try, so accept it and store it
+     correctly rather than rejecting it: one row per box, quantity shared out.
+     Silently keeping the raw string would hide the item from both box filters. */
+  const parts = expandMultiBox(it);
+  for (const p of parts) await DB.put('items', p);
+  if (editingId) items = items.filter(x => x.id !== editingId);
+  items.push(...parts);
+
   // teach the barcode→set memory for instant future scans
   if (barcode) {
     await DB.put('memory', { barcode, name, setNum, theme: it.theme, imgUrl: it.imgUrl, numParts: it.numParts });
@@ -885,7 +891,9 @@ async function save() {
   }
   editingId = null;
   render(); closeSheets();
-  toast('Saved to ledger', 'good');
+  toast(parts.length > 1
+    ? `Saved as ${parts.length} entries, one per box (${parts.map(p => `${p.boxId}: ${p.qty}`).join(', ')})`
+    : 'Saved to ledger', 'good');
 }
 
 $('#btnDelete').addEventListener('click', async () => {
@@ -918,12 +926,91 @@ function contributeBarcode(barcode, setNum) {
   }).catch(() => {});
 }
 
+/* ---------- multi-box entries ----------
+   A row answers two questions at once: qty says how many, boxId says where.
+   It can only answer both honestly for a single location, so "1,4" is not a
+   value we can store — box matching is exact, meaning such a row is invisible
+   when you filter by *either* box it's really in.
+
+   Only punctuation counts as a separator. Splitting on the word "and" would
+   wreck a legitimately named box like "Attic and Loft". */
+const BOX_SEPARATORS = /[,;/|]+/;
+function splitBoxList(v) {
+  return String(v ?? '').split(BOX_SEPARATORS).map(s => s.trim()).filter(Boolean);
+}
+const isMultiBox = v => splitBoxList(v).length > 1;
+
+/* Spread a quantity over N boxes as evenly as possible, remainder to the
+   first. It's a guess — only you know the real split — but it conserves the
+   total and is a better starting point than dumping everything in one box. */
+function shareOut(qty, n) {
+  const total = Math.max(0, qty || 0);
+  const base = Math.floor(total / n), extra = total % n;
+  return Array.from({ length: n }, (_, i) => base + (i < extra ? 1 : 0));
+}
+
+/* Turn one multi-box row into one row per box. The first keeps the original
+   id so history and any references survive; the rest are new rows. */
+function expandMultiBox(item) {
+  const boxes = splitBoxList(item.boxId);
+  if (boxes.length < 2) return [item];
+  const share = shareOut(item.qty, boxes.length);
+  return boxes.map((box, i) => ({
+    ...item,
+    id: i === 0 ? item.id : uid(),
+    boxId: box,
+    qty: share[i],
+    updatedAt: Date.now(),
+  }));
+}
+
+/* One-off repair for rows recorded before scanning became box-aware. Runs at
+   startup because such rows can't be found by the box filter, so leaving them
+   for the user to spot isn't realistic. */
+async function repairMultiBoxItems() {
+  const bad = items.filter(x => isMultiBox(x.boxId));
+  if (!bad.length) return;
+  let added = 0;
+  for (const item of bad) {
+    const parts = expandMultiBox(item);
+    for (const p of parts) await DB.put('items', p);
+    items = items.filter(x => x.id !== item.id).concat(parts);
+    added += parts.length - 1;
+  }
+  render();
+  toast(`Split ${bad.length} multi-box ${bad.length === 1 ? 'entry' : 'entries'} into ${added + bad.length} rows — check the quantities`, 'good');
+}
+
 /* ---------- barcode resolve ---------- */
 async function resolveBarcode(code) {
-  // 1. exact item already in ledger → jump to editing it
-  const existing = items.find(x => x.barcode === code);
+  /* 1. Already in the ledger *in this box* → adjust that row.
+
+     Matching on the barcode alone is what created the "1,4" problem: scanning
+     a set you own while packing a different box reopened the original row, so
+     the only way to record the second location was to cram both into one
+     field. With an active box set, a copy in a different box is a different
+     row. Without one, box tracking isn't in play, so barcode alone is right. */
+  const existing = activeBox
+    ? items.find(x => x.barcode === code && (x.boxId || '') === activeBox)
+    : items.find(x => x.barcode === code);
   if (existing) {
-    openEditor(existing, { text: `Already in your ledger — quantity ${existing.qty}. Adjust below.`, icon: '↺' });
+    openEditor(existing, {
+      text: `Already in ${existing.boxId ? 'box ' + existing.boxId : 'your ledger'} — quantity ${existing.qty}. Adjust below.`,
+      icon: '↺',
+    });
+    return;
+  }
+
+  /* 2. Owned, but somewhere else → start a NEW row for this box, copying the
+        set's details so nothing has to be re-identified. */
+  const elsewhere = items.find(x => x.barcode === code);
+  if (elsewhere) {
+    const { id, qty, note, price, ...details } = elsewhere;
+    openEditor({ ...details, barcode: code, qty: 1, boxId: activeBox || '' }, {
+      icon: '＋',
+      text: `You already have ${qty} in ${elsewhere.boxId ? 'box ' + elsewhere.boxId : 'no box'}. `
+          + `Adding a separate entry for box ${activeBox}.`,
+    });
     return;
   }
   // 2. remembered from a past scan → prefill, ready to save
@@ -1732,6 +1819,7 @@ $('#boxPill').addEventListener('click', async () => {
   netStatus();
   updateSortLabel();
   render();
+  await repairMultiBoxItems();
   if ('serviceWorker' in navigator) {
     try { await navigator.serviceWorker.register('sw.js'); } catch (e) {}
   }
