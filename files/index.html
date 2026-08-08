@@ -518,6 +518,10 @@
   </div>
   <div class="sheet-body">
     <div class="set-group">
+      <div class="set-row tap" id="setRefreshAll">
+        <div class="t"><b>Fill in missing details</b><small id="refreshHint">Look up MSRP, theme, piece count and images for every set you own</small></div>
+        <span class="go">↻</span>
+      </div>
       <div class="set-row tap" id="setImportCatalog">
         <div class="t"><b>Import Lego catalog</b><small id="catalogStatus">Adds set names, piece counts & images for offline autofill</small></div>
         <span class="go">›</span>
@@ -1641,6 +1645,52 @@ document.addEventListener('pointerdown', e => {
   if (!searchHelpVisible()) return;
   if (e.target.closest('#searchHelp') || e.target.closest('.search')) return;
   showSearchHelp(false);
+});
+
+/* Backfill details across the whole ledger, so sets added before a field
+   existed don't have to be reopened one at a time.
+
+   MSRP is a fact about the set, so it's always refreshed. Everything else only
+   fills blanks — the same rule as the per-item Identify button, because names
+   and themes are things you may have deliberately edited. */
+$('#setRefreshAll').addEventListener('click', async () => {
+  const targets = items.filter(x => String(x.setNum ?? '').trim());
+  if (!targets.length) { toast('No items with a set number yet', 'bad'); return; }
+  if (!navigator.onLine) { toast('You’re offline — try when connected', 'bad'); return; }
+
+  const row = $('#refreshHint');
+  const original = row.textContent;
+  let updated = 0, msrpAdded = 0, missed = 0;
+
+  for (let i = 0; i < targets.length; i++) {
+    const x = targets[i];
+    row.textContent = `Checking ${i + 1} of ${targets.length}…`;
+    try {
+      const r = await fetch('api/set?num=' + encodeURIComponent(x.setNum));
+      const d = (await r.json()).result;
+      if (!d) { missed++; continue; }
+
+      let touched = false;
+      if (d.msrp && d.msrp !== x.msrp) { x.msrp = d.msrp; msrpAdded++; touched = true; }
+      if (!String(x.theme ?? '').trim() && d.theme) { x.theme = d.theme; touched = true; }
+      if (!x.numParts && d.numParts) { x.numParts = d.numParts; touched = true; }
+      if (!x.imgUrl && d.imgUrl) { x.imgUrl = d.imgUrl; touched = true; }
+      if (!String(x.name ?? '').trim() && d.name) { x.name = d.name; touched = true; }
+
+      if (touched) {
+        x.updatedAt = Date.now();
+        await DB.put('items', x);
+        updated++;
+      }
+    } catch (e) { missed++; }
+  }
+
+  row.textContent = original;
+  render();
+  const bits = [`${updated} item${updated === 1 ? '' : 's'} updated`];
+  if (msrpAdded) bits.push(`${msrpAdded} got an MSRP`);
+  if (missed) bits.push(`${missed} not in the database`);
+  toast(bits.join(' · '), updated ? 'good' : '');
 });
 
 /* ---------- settings ---------- */
