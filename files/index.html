@@ -872,6 +872,8 @@ function openEditor(item, resolvedNote) {
   $('#editSheet').dataset.img = item?.imgUrl || '';
   $('#editSheet').dataset.parts = item?.numParts || '';
   $('#editSheet').dataset.msrp = item?.msrp || '';
+  // cleared per item, or an alias from the previously edited row leaks into this one
+  $('#editSheet').dataset.alt = '';
   showMsrpHint();
   $('#fUnresolved').checked = item?.unresolved || false;
   openSheet($('#editSheet'));
@@ -905,6 +907,9 @@ async function save() {
        to be forced on at save, which silently moved an existing item into
        whatever box happened to be active while you edited it. */
     boxId: $('#fBox').value.trim(),
+    /* Other codes that resolve to this item — the physically scanned symbol
+       when it differed from the GTIN we ended up storing. */
+    altBarcodes: mergeAlts(it.altBarcodes, $('#editSheet').dataset.alt, barcode),
     updatedAt: now,
   });
   /* Typing "1,4" is a reasonable thing to try, so accept it and store it
@@ -915,11 +920,13 @@ async function save() {
   if (editingId) items = items.filter(x => x.id !== editingId);
   items.push(...parts);
 
-  // teach the barcode→set memory for instant future scans
-  if (barcode) {
-    await DB.put('memory', { barcode, name, setNum, theme: it.theme, imgUrl: it.imgUrl, numParts: it.numParts });
-    // and teach the shared table, so this barcode is known on every device
-    if (setNum) contributeBarcode(barcode, setNum);
+  /* Teach every code that identifies this set — the canonical one and any
+     alias — so a rescan is instant whichever symbol the scanner reads, both
+     on this device and, via the shared table, on every other one. */
+  const teach = [barcode, ...(it.altBarcodes || [])].filter(Boolean);
+  for (const code of teach) {
+    await DB.put('memory', { barcode: code, name, setNum, theme: it.theme, imgUrl: it.imgUrl, numParts: it.numParts });
+    if (setNum) contributeBarcode(code, setNum);
   }
   editingId = null;
   render(); closeSheets();
@@ -956,6 +963,43 @@ function contributeBarcode(barcode, setNum) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ barcode, setNum }),
   }).catch(() => {});
+}
+
+/* ---------- barcode identity ----------
+   An item's `barcode` is the canonical code — the GTIN, when a lookup told us
+   the scanned symbol wasn't it. `altBarcodes` keeps whatever was physically
+   scanned, so rescanning the same box still finds the same row instead of
+   creating a duplicate. Matching normalises the way the server does, since a
+   UPC-A can arrive as 12 digits or zero-padded to 13. */
+function codeForms(code) {
+  const d = String(code ?? '').replace(/\D/g, '');
+  if (!d) return [];
+  const out = new Set([d]);
+  if (d.length === 12) out.add('0' + d);
+  if (d.length === 13 && d.startsWith('0')) out.add(d.slice(1));
+  out.add(d.replace(/^0+/, ''));
+  return [...out].filter(Boolean);
+}
+
+/* Fold a newly seen alias into the existing list, dropping anything that is
+   just the canonical barcode in another form — an alias identical to the
+   barcode is noise, not information. */
+function mergeAlts(existing, candidate, canonical) {
+  const canon = new Set(codeForms(canonical));
+  const out = [];
+  for (const v of [...(existing || []), candidate]) {
+    const d = String(v ?? '').replace(/\D/g, '');
+    if (!d || canon.has(d)) continue;
+    if (!out.includes(d)) out.push(d);
+  }
+  return out;
+}
+
+function itemMatchesCode(item, code) {
+  const want = new Set(codeForms(code));
+  if (!want.size) return false;
+  const mine = [item.barcode, ...(item.altBarcodes || [])];
+  return mine.some(b => codeForms(b).some(f => want.has(f)));
 }
 
 /* ---------- multi-box entries ----------
@@ -1023,8 +1067,8 @@ async function resolveBarcode(code) {
      field. With an active box set, a copy in a different box is a different
      row. Without one, box tracking isn't in play, so barcode alone is right. */
   const existing = activeBox
-    ? items.find(x => x.barcode === code && (x.boxId || '') === activeBox)
-    : items.find(x => x.barcode === code);
+    ? items.find(x => itemMatchesCode(x, code) && (x.boxId || '') === activeBox)
+    : items.find(x => itemMatchesCode(x, code));
   if (existing) {
     openEditor(existing, {
       text: `Already in ${existing.boxId ? 'box ' + existing.boxId : 'your ledger'} — quantity ${existing.qty}. Adjust below.`,
@@ -1035,7 +1079,7 @@ async function resolveBarcode(code) {
 
   /* 2. Owned, but somewhere else → start a NEW row for this box, copying the
         set's details so nothing has to be re-identified. */
-  const elsewhere = items.find(x => x.barcode === code);
+  const elsewhere = items.find(x => itemMatchesCode(x, code));
   if (elsewhere) {
     const { id, qty, note, price, ...details } = elsewhere;
     openEditor({ ...details, barcode: code, qty: 1, boxId: activeBox || '' }, {
@@ -1071,6 +1115,15 @@ async function resolveBarcode(code) {
     if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
     if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
     if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; showMsrpHint(); }
+    /* The lookup resolved through a different code than the one scanned, which
+       means the scanned symbol wasn't the product's real identifier. Store the
+       GTIN as the barcode and keep the scanned one as an alias so rescanning
+       the same box still lands on this row. */
+    if (found.matchedGtin && found.matchedGtin !== $('#fBarcode').value.trim()) {
+      const scanned = $('#fBarcode').value.trim();
+      $('#fBarcode').value = found.matchedGtin;
+      $('#editSheet').dataset.alt = scanned;
+    }
     setResolvedNote({ icon: '✓',
       text: `Identified via ${found.source}${found.setNum ? ' · set ' + found.setNum : ''}. Check the details and save.` });
   } else {
@@ -1256,6 +1309,15 @@ $('#btnIdentify').addEventListener('click', async () => {
     if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
     if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
     if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; showMsrpHint(); }
+    /* The lookup resolved through a different code than the one scanned, which
+       means the scanned symbol wasn't the product's real identifier. Store the
+       GTIN as the barcode and keep the scanned one as an alias so rescanning
+       the same box still lands on this row. */
+    if (found.matchedGtin && found.matchedGtin !== $('#fBarcode').value.trim()) {
+      const scanned = $('#fBarcode').value.trim();
+      $('#fBarcode').value = found.matchedGtin;
+      $('#editSheet').dataset.alt = scanned;
+    }
     if (found.setNum) $('#fUnresolved').checked = false;
 
     let text = `Identified via ${found.source}`;
