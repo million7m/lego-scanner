@@ -72,6 +72,7 @@ function loadDb() {
   DB.sets = new Map(Object.entries(sets));
   DB.contributed = new Map(Object.entries(contributed));
   DB.prices = new Map(Object.entries(prices));
+  FACETS = null;                                  // rebuilt lazily from the new data
   console.log(`Local DB: ${DB.barcodes.size} harvested barcodes, ${DB.sets.size} sets, ` +
     `${DB.prices.size} prices, ${DB.contributed.size} contributed`);
   if (!DB.barcodes.size) {
@@ -92,6 +93,33 @@ function codeVariants(code) {
   if (d.length === 14 && d.startsWith('0')) out.add(d.slice(1));
   out.add(d.replace(/^0+/, ''));
   return [...out].filter(Boolean);
+}
+
+/* Rebrickable's catalogue also carries merchandise — Jibbitz, shoes, books,
+   database bookkeeping entries. Including those in a completion report would
+   bury the actual sets, and nobody is trying to "complete" a lunch bag. Same
+   rule the harvester uses to decide what's worth fetching. */
+const NON_SET_THEMES = new Set(['Gear', 'Books']);
+const REAL_SET_NUM = /^\d{3,7}-\d+$/;
+function isRealSet(setNum, row) {
+  return row && row[3] > 0 && !NON_SET_THEMES.has(row[2]) && REAL_SET_NUM.test(setNum);
+}
+
+let FACETS = null;
+function catalogFacets() {
+  if (FACETS) return FACETS;
+  const years = new Map(), themes = new Map();
+  for (const [setNum, row] of DB.sets) {
+    if (!isRealSet(setNum, row)) continue;
+    const [, year, theme] = row;
+    if (year) years.set(year, (years.get(year) || 0) + 1);
+    if (theme) themes.set(theme, (themes.get(theme) || 0) + 1);
+  }
+  FACETS = {
+    years: [...years.entries()].sort((a, b) => b[0] - a[0]),
+    themes: [...themes.entries()].sort((a, b) => a[0].localeCompare(b[0])),
+  };
+  return FACETS;
 }
 
 /* Launch RRP, harvested from Brickset. Stored compactly as [usd, gbp, eur];
@@ -450,6 +478,37 @@ const server = http.createServer(async (req, res) => {
     try { result = await identify(code, keys); } catch (e) { console.error('identify error:', e); result = null; }
     res.writeHead(200);
     return res.end(JSON.stringify({ result, debug: { boKey: !!keys.bo, rbKey: !!keys.rb, blKey: !!keys.bl } }));
+  }
+
+  /* Year and theme pickers for the completion report. Computed from the same
+     filtered catalogue the report uses, so every option returns results. */
+  if (u.pathname === '/api/facets') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.writeHead(200);
+    return res.end(JSON.stringify(catalogFacets()));
+  }
+
+  /* The candidate list for a completion report. The app diffs this against
+     your ledger locally — the server never sees what you own. */
+  if (u.pathname === '/api/catalog') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const year = (u.searchParams.get('year') || '').trim();
+    const theme = (u.searchParams.get('theme') || '').trim();
+    if (!year && !theme) {
+      res.writeHead(400);
+      return res.end('{"error":"specify a year or a theme"}');
+    }
+    const sets = [];
+    for (const [setNum, row] of DB.sets) {
+      if (!isRealSet(setNum, row)) continue;
+      if (year && String(row[1]) !== year) continue;
+      if (theme && row[2] !== theme) continue;
+      const price = DB.prices.get(setNum);
+      sets.push([setNum, row[0], row[2], row[3], price ? price[0] : 0, row[1]]);
+    }
+    sets.sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }));
+    res.writeHead(200);
+    return res.end(JSON.stringify({ count: sets.length, sets }));
   }
 
   /* Resolve a set number straight from the local catalog — lets the app fill in

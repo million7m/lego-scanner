@@ -420,6 +420,30 @@
   </div>
 </div>
 
+<!-- Collection report sheet -->
+<div class="sheet" id="reportSheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <h3>What am I missing?</h3>
+    <button class="x" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="row2">
+      <div class="field">
+        <label>Year</label>
+        <select id="rptYear"><option value="">Any year</option></select>
+      </div>
+      <div class="field">
+        <label>Theme</label>
+        <select id="rptTheme"><option value="">Any theme</option></select>
+      </div>
+    </div>
+    <p class="hint" id="rptNote">Pick a year, a theme, or both.</p>
+    <button class="btn primary small" id="rptRun" style="margin-top:6px">Run report</button>
+    <div id="rptOut" style="margin-top:16px"></div>
+  </div>
+</div>
+
 <!-- Sort sheet -->
 <div class="sheet" id="sortSheet" aria-hidden="true">
   <div class="grip"></div>
@@ -518,6 +542,10 @@
   </div>
   <div class="sheet-body">
     <div class="set-group">
+      <div class="set-row tap" id="setReport">
+        <div class="t"><b>What am I missing?</b><small>Compare your ledger against every set from a year or theme</small></div>
+        <span class="go">›</span>
+      </div>
       <div class="set-row tap" id="setRefreshAll">
         <div class="t"><b>Fill in missing details</b><small id="refreshHint">Look up MSRP, theme, piece count and images for every set you own</small></div>
         <span class="go">↻</span>
@@ -1289,6 +1317,15 @@ $('#btnLookup').addEventListener('click', async () => {
    set number can show its picture, including everything added before the
    database existed. Sets Rebrickable has no photo for just 404, and the
    <img onerror> already falls back to the letter glyph. */
+/* "75192" and "75192-1" are the same set. Variant suffixes aren't always
+   numeric ("215-2B"), so a value counts as complete once it has a dash —
+   the same rule the server applies. */
+function normSet(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (!s) return '';
+  return s.includes('-') ? s : s + '-1';
+}
+
 function setImageUrl(setNum) {
   const s = String(setNum || '').trim();
   if (!s) return '';
@@ -1691,6 +1728,78 @@ $('#setRefreshAll').addEventListener('click', async () => {
   if (msrpAdded) bits.push(`${msrpAdded} got an MSRP`);
   if (missed) bits.push(`${missed} not in the database`);
   toast(bits.join(' · '), updated ? 'good' : '');
+});
+
+/* ---------- completion report ----------
+   Which sets from a year or theme aren't in the ledger. The server sends the
+   candidate list; the diff happens here, so your collection never leaves the
+   device. Matching is on normalised set number, since an item may have been
+   typed as "75192" while the catalogue says "75192-1". */
+let facetsLoaded = false;
+
+async function loadFacets() {
+  if (facetsLoaded) return;
+  const f = await (await fetch('api/facets')).json();
+  $('#rptYear').innerHTML = '<option value="">Any year</option>' +
+    f.years.map(([y, n]) => `<option value="${y}">${y} (${n})</option>`).join('');
+  $('#rptTheme').innerHTML = '<option value="">Any theme</option>' +
+    f.themes.map(([t, n]) => `<option value="${esc(t)}">${esc(t)} (${n})</option>`).join('');
+  facetsLoaded = true;
+}
+
+$('#setReport').addEventListener('click', async () => {
+  if (!navigator.onLine) { toast('You’re offline — the report needs the catalogue', 'bad'); return; }
+  try { await loadFacets(); } catch (e) { toast('Could not load the catalogue', 'bad'); return; }
+  $('#rptOut').innerHTML = '';
+  openSheet($('#reportSheet'));
+});
+
+$('#rptRun').addEventListener('click', async () => {
+  const year = $('#rptYear').value, theme = $('#rptTheme').value;
+  if (!year && !theme) { toast('Pick a year or a theme first', 'bad'); return; }
+
+  const btn = $('#rptRun'); const orig = btn.textContent;
+  btn.textContent = 'Working…'; btn.disabled = true;
+  try {
+    const q = new URLSearchParams();
+    if (year) q.set('year', year);
+    if (theme) q.set('theme', theme);
+    const d = await (await fetch('api/catalog?' + q)).json();
+
+    const owned = new Set(items.map(x => normSet(x.setNum)).filter(Boolean));
+    const missing = d.sets.filter(s => !owned.has(normSet(s[0])));
+    const have = d.count - missing.length;
+    const pct = d.count ? Math.round((have / d.count) * 100) : 0;
+    const msrpTotal = missing.reduce((n, s) => n + (s[4] || 0), 0);
+
+    const label = [theme, year].filter(Boolean).join(' · ') || 'catalogue';
+    $('#rptOut').innerHTML = `
+      <div class="resolved">✓ ${have} of ${d.count} owned in ${esc(label)} — ${pct}% complete</div>
+      <p class="hint" style="margin:10px 0">
+        ${missing.length} missing${msrpTotal ? ` · about $${msrpTotal.toFixed(2)} at original RRP` : ''}
+      </p>
+      ${missing.length ? `<div class="chips" style="margin-bottom:10px">
+        <button type="button" class="chip" id="rptCopy">Copy list</button>
+      </div>` : ''}
+      <div class="set-group">
+        ${missing.slice(0, 300).map(s => `
+          <div class="set-row">
+            <div class="t"><b>${esc(s[1])}</b><small>#${esc(s[0])} · ${s[3]} pcs${s[4] ? ` · $${s[4]}` : ''}${year ? '' : ` · ${s[5]}`}</small></div>
+          </div>`).join('')}
+      </div>
+      ${missing.length > 300 ? `<p class="hint">Showing the first 300 of ${missing.length}.</p>` : ''}`;
+
+    const copy = $('#rptCopy');
+    if (copy) copy.addEventListener('click', async () => {
+      const text = missing.map(s => `${s[0]}\t${s[1]}\t${s[3]} pcs\t${s[4] ? '$' + s[4] : ''}`).join('\n');
+      try { await navigator.clipboard.writeText(text); toast('Missing list copied', 'good'); }
+      catch (e) { toast('Could not copy', 'bad'); }
+    });
+  } catch (e) {
+    toast('Report failed — try again', 'bad');
+  } finally {
+    btn.textContent = orig; btn.disabled = false;
+  }
 });
 
 /* ---------- settings ---------- */
