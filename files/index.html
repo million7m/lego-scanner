@@ -687,7 +687,7 @@ const SORTS = {
   qty:    { label: 'Quantity owned',   hint: '', type: 'num', get: x => x.qty || 0, asc: 'Fewest first', desc: 'Most first' },
   pieces: { label: 'Piece count',      hint: '', type: 'num', get: x => x.numParts || 0, asc: 'Smallest first', desc: 'Largest first' },
   msrp:   { label: 'MSRP',             hint: 'Original retail price', type: 'num', get: x => money(x.msrp), asc: 'Cheapest first', desc: 'Priciest first' },
-  value:  { label: 'Your value',       hint: 'What you recorded', type: 'num', get: x => money(x.price), asc: 'Lowest first', desc: 'Highest first' },
+  value:  { label: 'Value',            hint: 'Yours, or MSRP where you have not set one', type: 'num', get: x => effectiveValue(x), asc: 'Lowest first', desc: 'Highest first' },
 };
 let sortDir = 'desc';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -704,14 +704,28 @@ function toast(msg, kind = '') {
 
 /* ---------- render ---------- */
 function priceNum(p) { return Number.parseFloat(String(p ?? '').replace(/[^0-9.]/g, '')) || 0; }
+/* What an item is worth for totalling and sorting. A value you typed always
+   wins — it's what you decided this copy is worth. Failing that, fall back to
+   the set's MSRP rather than counting it as nothing: an unpriced set is not a
+   worthless one, and treating it as zero understated the whole ledger. */
+function effectiveValue(x) {
+  return priceNum(x.price) || Number(x.msrp) || 0;
+}
+const isEstimatedValue = x => !priceNum(x.price) && Number(x.msrp) > 0;
+
 function computeStats() {
   const totalPieces = items.reduce((a, x) => a + (x.qty || 0), 0);
-  const totalValue = items.reduce((a, x) => a + priceNum(x.price) * (x.qty || 0), 0);
+  const totalValue = items.reduce((a, x) => a + effectiveValue(x) * (x.qty || 0), 0);
+  const estimated = items.filter(isEstimatedValue).length;
   $('#statSets').textContent = items.length;
   $('#statPieces').textContent = totalPieces;
   if (totalValue > 0) {
     $('#statValue').textContent = totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 });
     $('#statValueWrap').style.display = '';
+    // say when the number leans on MSRP, so it isn't mistaken for your own figures
+    $('#statValue').title = estimated
+      ? `${estimated} of ${items.length} valued at MSRP because no value was entered`
+      : 'From the values you entered';
   } else {
     $('#statValueWrap').style.display = 'none';
   }
@@ -831,7 +845,7 @@ function render() {
           ${x.setNum ? `<span class="tag set">#${esc(x.setNum)}</span>` : ''}
           ${x.theme ? `<span class="tag">${esc(x.theme)}</span>` : ''}
           ${x.numParts ? `<span class="tag">${x.numParts} pcs</span>` : ''}
-          ${x.msrp ? `<span class="tag" title="Original retail price">MSRP $${esc(String(x.msrp))}</span>` : ''}
+          ${x.msrp ? `<span class="tag" title="${isEstimatedValue(x) ? 'Counted as this item’s value — no value entered' : 'Original retail price'}"${isEstimatedValue(x) ? ' style="color:#bfe6cb; border-color:rgba(95,184,120,.3)"' : ''}>MSRP $${esc(String(x.msrp))}</span>` : ''}
           ${x.boxId ? `<span class="tag">box:${esc(x.boxId)}</span>` : ''}
           ${x.price ? `<span class="tag" style="color:#bfe6cb; border-color:rgba(95,184,120,.3)">${esc(String(x.price))}</span>` : ''}
           ${x.unresolved ? `<span class="tag" style="color:var(--gold-soft); border-color:rgba(242,184,56,.3)">Unresolved</span>` : ''}
