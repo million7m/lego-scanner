@@ -60,9 +60,12 @@
   .studs i{background:var(--gold-deep); border-radius:50%; box-shadow:inset 0 1.5px 1px rgba(255,255,255,.35);}
   .brand h1{font-family:var(--disp); font-weight:800; font-size:22px; letter-spacing:-.02em; margin:0;}
   .brand .sub{font-size:11.5px; color:var(--muted); margin-top:1px; letter-spacing:.02em;}
+  .brand-text{min-width:0;}
   .brand-right{margin-left:auto; display:flex; align-items:center; gap:8px;}
+  /* "No box" broke across two lines when space got tight */
   .pill{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
-    padding:6px 10px; border-radius:999px; background:var(--surface); border:1px solid var(--line);}
+    white-space:nowrap; padding:6px 10px; border-radius:999px;
+    background:var(--surface); border:1px solid var(--line);}
   .pill .dot{width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green);}
   .pill.off .dot{background:var(--faint); box-shadow:none;}
   .iconbtn{width:38px; height:38px; border-radius:11px; background:var(--surface); border:1px solid var(--line);
@@ -119,10 +122,15 @@
 
   /* ---------- Empty ---------- */
   .empty{padding:40px 30px 10px; text-align:center;}
-  .empty .art{width:96px; height:96px; margin:0 auto 20px; border-radius:22px;
-    background:linear-gradient(160deg,var(--surface2),var(--bg2)); border:1px solid var(--line);
-    display:grid; place-items:center; position:relative;}
-  .empty .art .studs{width:52px;height:52px; grid-template-columns:repeat(2,1fr); gap:6px; padding:9px;}
+  /* The brick used to sit inside a bordered 96px tile — a box within a box,
+     which read as a heavy placeholder rather than artwork. Now it's just the
+     brick, larger, lit from behind by a soft glow. */
+  .empty .art{width:88px; height:88px; margin:0 auto 22px; display:grid;
+    place-items:center; position:relative;}
+  .empty .art::before{content:""; position:absolute; inset:0; border-radius:50%;
+    background:radial-gradient(circle, rgba(242,184,56,.20), rgba(242,184,56,0) 68%);}
+  .empty .art .studs{position:relative; width:62px; height:62px; gap:7px; padding:10px;
+    border-radius:14px;}
   .empty h2{font-family:var(--disp); font-weight:800; font-size:22px; margin:0 0 8px; letter-spacing:-.02em;}
   .empty p{color:var(--muted); font-size:14.5px; margin:0 auto; max-width:34ch;}
 
@@ -264,6 +272,31 @@
   .toast.good{border-color:rgba(95,184,120,.5);} .toast.good .ico{color:var(--green);}
   .toast.bad{border-color:rgba(224,86,63,.5);} .toast.bad .ico{color:var(--red);}
 
+  /* ---------- Phones ----------
+     The header and toolbar were single fixed rows with no breakpoint at all,
+     so on a ~390px screen the title wrapped, the "No box" pill broke in half,
+     and the search field collapsed to "Search nam".
+
+     Both now wrap deliberately: status pills drop to their own row under the
+     title, and the search field takes a full row above the sort/filter
+     buttons instead of being squeezed between them. */
+  @media (max-width:520px){
+    header{padding:calc(var(--safe-top) + 12px) 14px 10px;}
+    .brand{flex-wrap:wrap; gap:10px;}
+    .brand h1{font-size:19px;}
+    .brand .sub{font-size:11px;}
+    #btnSettings{margin-left:auto; width:36px; height:36px;}
+    .brand-right{order:5; flex-basis:100%; margin-left:0; gap:8px;}
+
+    .toolbar{flex-wrap:wrap; padding:4px 14px 10px;}
+    .search{flex-basis:100%;}
+    .sortbtn{flex:1 1 0; justify-content:center; min-width:0;}
+    .sortbtn span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+    .searchhelp{margin-left:14px; margin-right:14px;}
+    .empty{padding:32px 22px 10px;}
+  }
+
   @media (prefers-reduced-motion: reduce){
     *{animation:none !important; transition:none !important;}
   }
@@ -274,17 +307,17 @@
   <header>
     <div class="brand">
       <div class="studs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-      <div>
+      <div class="brand-text">
         <h1>Brick Ledger</h1>
         <div class="sub">Scan · count · keep — works offline</div>
       </div>
       <div class="brand-right">
         <span class="pill" id="netPill"><span class="dot"></span><span id="netText">Online</span></span>
-          <span class="pill" id="boxPill" style="margin-left:8px"><span class="dot" style="background:var(--blue)"></span><span id="boxText">No box</span></span>
-        <button class="iconbtn" id="btnSettings" aria-label="Settings">
+        <span class="pill" id="boxPill"><span class="dot" style="background:var(--blue)"></span><span id="boxText">No box</span></span>
+      </div>
+      <button class="iconbtn" id="btnSettings" aria-label="Settings">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
-      </div>
     </div>
   </header>
 
