@@ -170,6 +170,53 @@ function lookupLocal(code) {
   return null;
 }
 
+/* GS1 mod-10 check digit. Product text is full of long numbers — item codes,
+   ASINs, dimensions run together — and retrying the table with each of them
+   would invite false matches. A valid check digit means it's really a GTIN. */
+function gtinCheckDigitValid(d) {
+  if (!/^(\d{8}|\d{12,14})$/.test(d)) return false;
+  const digits = [...d].map(Number);
+  const check = digits.pop();
+  let sum = 0;
+  for (let i = digits.length - 1, w = 3; i >= 0; i--, w = w === 3 ? 1 : 3) sum += digits[i] * w;
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+/* Pull every plausible GTIN out of a lookup result: the provider's own
+   identifier fields first, then anything GTIN-shaped in the title or
+   description. Excludes the code we already tried. */
+function gtinCandidates(result, scanned) {
+  const seen = new Set(codeVariants(scanned));
+  const out = [];
+  const add = v => {
+    const d = String(v || '').replace(/\D/g, '');
+    if (!d || seen.has(d) || !gtinCheckDigitValid(d)) return;
+    seen.add(d);
+    out.push(d);
+  };
+  for (const c of result?.codes || []) add(c);
+  const text = `${result?.name || ''} ${result?.note || ''}`;
+  // labelled first — "GTIN: 5702016616897" is a much stronger signal
+  for (const m of text.matchAll(/\b(?:GTIN|EAN|UPC)[^\d]{0,4}(\d{8,14})\b/gi)) add(m[1]);
+  for (const m of text.matchAll(/\b\d{12,14}\b/g)) add(m[0]);
+  return out;
+}
+
+/* The scanned symbol isn't always the code the set is catalogued under —
+   UPC-E, a regional variant, or an inner carton code will miss the table
+   while the product's real GTIN sits right there in the lookup result. Retry
+   with those before falling back to guessing a set number from the title. */
+function resolveViaGtin(result, scanned) {
+  for (const gtin of gtinCandidates(result, scanned)) {
+    const hit = lookupLocal(gtin);
+    if (hit) {
+      console.log(`Resolved ${scanned} via GTIN ${gtin} -> ${hit.setNum}`);
+      return { ...hit, source: hit.source + ` (via GTIN ${gtin})`, matchedGtin: gtin };
+    }
+  }
+  return null;
+}
+
 /* Persist a hand-resolved barcode. Note the free Render tier has an ephemeral
    filesystem, so this survives restarts only until the next deploy — pull them
    down via GET /api/contributions and commit them to keep them for good. */
@@ -263,6 +310,10 @@ async function lookupUpcitemdb(code) {
         note: it.description || '',
         price: it.highest_recorded_price ? String(it.highest_recorded_price) : '',
         source: 'UPCitemdb',
+        /* The response carries the product's own identifiers, which are often
+           the proper GTIN when the scanned symbol was a shortened or regional
+           variant. Kept so the caller can retry the local table with them. */
+        codes: [it.gtin, it.ean, it.upc, it.elid].filter(Boolean).map(String),
       };
       console.log('UPCitemdb found:', result);
       return result;
@@ -333,7 +384,8 @@ async function lookupWebFallback(code) {
         console.log('Web fallback parse failed for', url);
         continue;
       }
-      const result = { name, source: 'WebFallback' };
+      // keep the description: it often carries the product's GTIN
+      const result = { name, note: decodeHtmlEntities(descRaw || ''), source: 'WebFallback' };
       console.log('Web fallback found:', result);
       return result;
     } catch (e) {
@@ -446,7 +498,15 @@ async function identify(code, keys) {
     console.log('Trying UPCitemdb for:', code);
     const upcResult = await lookupUpcitemdb(code);
     console.log('UPC result:', upcResult);
-    if (upcResult) { const out = await enrichLegoSet(upcResult, rb); console.log('Identified (enriched):', out); return out; }
+    if (upcResult) {
+      /* Prefer an exact table hit on the product's real GTIN over parsing a
+         set number out of the title — the former is a fact, the latter a guess. */
+      const viaGtin = resolveViaGtin(upcResult, code);
+      if (viaGtin) return viaGtin;
+      const out = await enrichLegoSet(upcResult, rb);
+      console.log('Identified (enriched):', out);
+      return out;
+    }
   } catch (e) { console.error('UPCitemdb error:', e.message); }
 
   // 5) Web fallback using barcode result page title
@@ -454,7 +514,13 @@ async function identify(code, keys) {
     console.log('Trying web fallback for:', code);
     const webResult = await lookupWebFallback(code);
     console.log('Web fallback result:', webResult);
-    if (webResult) { const out = await enrichLegoSet(webResult, rb); console.log('Identified (enriched):', out); return out; }
+    if (webResult) {
+      const viaGtin = resolveViaGtin(webResult, code);
+      if (viaGtin) return viaGtin;
+      const out = await enrichLegoSet(webResult, rb);
+      console.log('Identified (enriched):', out);
+      return out;
+    }
   } catch (e) { console.error('Web fallback error:', e.message); }
 
   return null;
