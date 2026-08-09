@@ -637,6 +637,7 @@ const server = http.createServer(async (req, res) => {
         harvestedBarcodes: DB.barcodes.size,
         contributedBarcodes: DB.contributed.size,
         sets: DB.sets.size,
+        prices: DB.prices.size,
       },
       env: {
         BRICKOWL_KEY: !!process.env.BRICKOWL_KEY,
