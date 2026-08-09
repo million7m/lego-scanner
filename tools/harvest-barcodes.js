@@ -47,6 +47,7 @@ const DATA = path.join(__dirname, '..', 'data');
 const SETS_FILE = path.join(DATA, 'sets.json');
 const BARCODES_FILE = path.join(DATA, 'barcodes.json');
 const PRICES_FILE = path.join(DATA, 'prices.json');
+const DATES_FILE = path.join(DATA, 'dates.json');
 const STATE_FILE = path.join(DATA, 'harvest-state.json');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -97,6 +98,33 @@ function extractBarcodes(flat) {
   return { ean: ean?.[1] || '', upc: upc?.[1] || '' };
 }
 
+/* Brickset prints availability as "Launch/exit 27 Nov 20 - 31 Dec 23".
+   The exit date is the retirement date. Either side can be absent for a set
+   that never shipped at retail or is still available. */
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function parseBricksetDate(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2})$/);
+  if (!m) return '';
+  const mon = MONTHS[m[2].toLowerCase()];
+  if (!mon) return '';
+  /* Two-digit years across a catalogue spanning 1949-2027. Anything under 50
+     is this century; the rest belong to the last one. */
+  const yy = Number(m[3]);
+  const year = yy < 50 ? 2000 + yy : 1900 + yy;
+  return `${year}-${String(mon).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+}
+
+function extractDates(flat) {
+  const i = flat.search(/Launch\/exit/i);
+  if (i < 0) return null;
+  const seg = flat.slice(i + 11, i + 61).split(/Tags|Availability|Barcodes|Notes|Rating/)[0];
+  const m = seg.match(/(\d{1,2}\s+[A-Za-z]{3}\s+\d{2})?\s*-\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{2})?/);
+  if (!m) return null;
+  const launched = parseBricksetDate(m[1]);
+  const retired = parseBricksetDate(m[2]);
+  return (launched || retired) ? { launched, retired } : null;
+}
+
 /* Launch RRP, as "RRP £474.99, $549.99, €549.99".
 
    Two traps on the same page: a second "RRP (inflated)" line giving today's
@@ -138,13 +166,18 @@ function fmtDuration(ms) {
   const sets = readJson(SETS_FILE, {});
   const barcodes = readJson(BARCODES_FILE, {});
   const prices = readJson(PRICES_FILE, {});
+  const dates = readJson(DATES_FILE, {});
   const state = readJson(STATE_FILE, { done: [], stats: { found: 0, none: 0, failed: 0 } });
   const done = new Set(state.done);
-  /* Prices are tracked separately from barcodes: the barcode pass finished
-     before prices were being collected, so "visited for a barcode" says
-     nothing about whether we looked for an RRP. Without its own list, sets
-     that genuinely have no RRP would be refetched on every single run. */
-  const pricesSeen = new Set(state.pricesDone || []);
+  /* Page details (RRP, launch/exit dates) are tracked separately from
+     barcodes: the barcode pass finished before either was being collected, so
+     "visited for a barcode" says nothing about whether we read them. Without
+     its own list, sets that genuinely have no RRP would be refetched forever.
+
+     This list is deliberately distinct from the older pricesDone: those sets
+     were visited before dates were extracted, so they still need one more
+     pass. Reusing that list would have left half the catalogue dateless. */
+  const detailsSeen = new Set(state.detailsDone || []);
 
   /* Rebrickable's catalog also carries non-set merchandise — Jibbitz, shoes,
      lunch bags, books — which have no parts, usually 404 on Brickset, and
@@ -173,14 +206,15 @@ function fmtDuration(ms) {
     ? Object.keys(sets).filter(sn => done.has(sn) && !setsWithBarcode.has(sn) && tier(sn) < 2)
     : [];
 
-  /* Price backfill: real sets we have never looked for an RRP on. Merchandise
-     is skipped for the same reason as barcodes — it has no launch RRP listed. */
-  const needPrice = PRICES
-    ? Object.keys(sets).filter(sn => !pricesSeen.has(sn) && tier(sn) < 2)
+  /* Detail backfill: real sets whose page we've never read for RRP and
+     launch/exit dates. Merchandise is skipped for the same reason as barcodes
+     — it carries neither. */
+  const needDetails = PRICES
+    ? Object.keys(sets).filter(sn => !detailsSeen.has(sn) && tier(sn) < 2)
     : [];
 
   const fresh = Object.keys(sets).filter(sn => !done.has(sn));
-  const queue = [...new Set([...fresh, ...missing, ...needPrice])]
+  const queue = [...new Set([...fresh, ...missing, ...needDetails])]
     .filter(sn => !SINCE || (sets[sn][1] || 0) >= SINCE)
     .sort((a, b) => tier(a) - tier(b) || (sets[b][1] || 0) - (sets[a][1] || 0));
 
@@ -199,12 +233,13 @@ function fmtDuration(ms) {
     console.log(`Restricted to sets from ${SINCE} onward`);
   }
   if (PRICES) {
-    console.log(`Price backfill: ${needPrice.length} sets never checked for an RRP`);
+    console.log(`Detail backfill: ${needDetails.length} sets never read for RRP or dates`);
   }
   console.log(`New sets queued: ${fresh.filter(sn => !SINCE || (sets[sn][1] || 0) >= SINCE).length}`);
   console.log(`This run: ${target}`);
   console.log(`Barcodes known: ${Object.keys(barcodes).length}`);
   console.log(`Prices known: ${Object.keys(prices).length}`);
+  console.log(`Dates known: ${Object.keys(dates).length}`);
   if (!target) { console.log('\nNothing left to harvest.'); return; }
   console.log(`Estimated time at ${MIN_DELAY / 1000}s/set: ${fmtDuration(target * MIN_DELAY)}`);
   if (DRY_RUN) { console.log('\n--dry-run: queue sized, nothing fetched.'); return; }
@@ -216,14 +251,15 @@ function fmtDuration(ms) {
   const started = Date.now();
   /* state.stats is a lifetime tally across every run ever; these are scoped to
      this run, which is what you actually want to read at the end of one. */
-  const run = { found: 0, none: 0, failed: 0, filled: 0, priced: 0 };
+  const run = { found: 0, none: 0, failed: 0, filled: 0, priced: 0, dated: 0 };
 
   const save = () => {
     state.done = [...done];
-    state.pricesDone = [...pricesSeen];
+    state.detailsDone = [...detailsSeen];
     state.updatedAt = new Date().toISOString();
     fs.writeFileSync(BARCODES_FILE, JSON.stringify(barcodes));
     fs.writeFileSync(PRICES_FILE, JSON.stringify(prices));
+    fs.writeFileSync(DATES_FILE, JSON.stringify(dates));
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
   };
 
@@ -274,7 +310,13 @@ function fmtDuration(ms) {
          another 12-hour crawl later to get it. */
       const rrp = extractPrices(flat);
       if (rrp) { prices[setNum] = [rrp.usd, rrp.gbp, rrp.eur]; run.priced++; }
-      pricesSeen.add(setNum);
+
+      /* Launch/exit dates come off the same page. The exit date is what the
+         app reports as the retirement date. */
+      const when = extractDates(flat);
+      if (when) { dates[setNum] = [when.launched, when.retired]; if (when.retired) run.dated++; }
+
+      detailsSeen.add(setNum);
 
       const { ean, upc } = extractBarcodes(flat);
       const wasBlank = !setsWithBarcode.has(setNum);

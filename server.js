@@ -52,7 +52,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 const CONTRIB_FILE = path.join(DATA_DIR, 'contributed.json');
 const IMG_PREFIX = 'https://cdn.rebrickable.com/media/sets/';
 
-const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map(), prices: new Map() };
+const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map(), prices: new Map(), dates: new Map() };
 
 function loadJsonFile(name) {
   try {
@@ -68,13 +68,15 @@ function loadDb() {
   const sets = loadJsonFile('sets.json') || {};
   const contributed = loadJsonFile('contributed.json') || {};
   const prices = loadJsonFile('prices.json') || {};
+  const dates = loadJsonFile('dates.json') || {};
   DB.barcodes = new Map(Object.entries(barcodes));
   DB.sets = new Map(Object.entries(sets));
   DB.contributed = new Map(Object.entries(contributed));
   DB.prices = new Map(Object.entries(prices));
+  DB.dates = new Map(Object.entries(dates));
   FACETS = null;                                  // rebuilt lazily from the new data
   console.log(`Local DB: ${DB.barcodes.size} harvested barcodes, ${DB.sets.size} sets, ` +
-    `${DB.prices.size} prices, ${DB.contributed.size} contributed`);
+    `${DB.prices.size} prices, ${DB.dates.size} dates, ${DB.contributed.size} contributed`);
   if (!DB.barcodes.size) {
     console.warn('  No barcodes.json yet — run tools/build-sets.js then tools/harvest-barcodes.js');
   }
@@ -134,6 +136,19 @@ function msrpFor(setNum) {
   return out;
 }
 
+/* Launch and exit dates from Brickset, stored as [launched, retired] in ISO
+   form. An empty retired date means the set was still listed as available when
+   the page was read — not that it never retired. */
+function availabilityFor(setNum) {
+  const row = DB.dates.get(setNum);
+  if (!row) return {};
+  const [launched, retired] = row;
+  const out = {};
+  if (launched) out.launched = launched;
+  if (retired) out.retired = retired;
+  return out;
+}
+
 function setDetails(setNum) {
   const row = DB.sets.get(setNum);
   if (!row) return { setNum };
@@ -150,6 +165,7 @@ function setDetails(setNum) {
        by case, so deriving covers rows that have no override too. */
     imgUrl: img || IMG_PREFIX + setNum.toLowerCase() + '.jpg',
     ...msrpFor(setNum),
+    ...availabilityFor(setNum),
   };
 }
 
@@ -570,7 +586,9 @@ const server = http.createServer(async (req, res) => {
       if (year && String(row[1]) !== year) continue;
       if (theme && row[2] !== theme) continue;
       const price = DB.prices.get(setNum);
-      sets.push([setNum, row[0], row[2], row[3], price ? price[0] : 0, row[1]]);
+      const when = DB.dates.get(setNum);
+      // [setNum, name, theme, pieces, msrp, year, retired]
+      sets.push([setNum, row[0], row[2], row[3], price ? price[0] : 0, row[1], when ? (when[1] || '') : '']);
     }
     sets.sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }));
     res.writeHead(200);
@@ -638,6 +656,7 @@ const server = http.createServer(async (req, res) => {
         contributedBarcodes: DB.contributed.size,
         sets: DB.sets.size,
         prices: DB.prices.size,
+        dates: DB.dates.size,
       },
       env: {
         BRICKOWL_KEY: !!process.env.BRICKOWL_KEY,

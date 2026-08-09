@@ -1846,6 +1846,20 @@ $('#setRefreshAll').addEventListener('click', async () => {
    typed as "75192" while the catalogue says "75192-1". */
 let facetsLoaded = false;
 
+/* Retirement matters most for what you don't own yet: a retired set can only
+   be had second-hand, usually above RRP, while one still in production can be
+   bought at list. A blank date means Brickset hasn't recorded an exit — the
+   set is likely still available — which is not the same as unknown, so it's
+   left unlabelled rather than guessed at. */
+function retiredNote(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return '';
+  const when = d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  const gone = d.getTime() < Date.now();
+  return ` · <span style="color:${gone ? 'var(--gold-soft)' : 'var(--muted)'}">${gone ? 'retired' : 'retires'} ${esc(when)}</span>`;
+}
+
 async function loadFacets() {
   if (facetsLoaded) return;
   const f = await (await fetch('api/facets')).json();
@@ -1893,14 +1907,16 @@ $('#rptRun').addEventListener('click', async () => {
       <div class="set-group">
         ${missing.slice(0, 300).map(s => `
           <div class="set-row">
-            <div class="t"><b>${esc(s[1])}</b><small>#${esc(s[0])} · ${s[3]} pcs${s[4] ? ` · $${s[4]}` : ''}${year ? '' : ` · ${s[5]}`}</small></div>
+            <div class="t"><b>${esc(s[1])}</b><small>#${esc(s[0])} · ${s[3]} pcs${s[4] ? ` · $${s[4]}` : ''}${year ? '' : ` · ${s[5]}`}${retiredNote(s[6])}</small></div>
           </div>`).join('')}
       </div>
       ${missing.length > 300 ? `<p class="hint">Showing the first 300 of ${missing.length}.</p>` : ''}`;
 
     const copy = $('#rptCopy');
     if (copy) copy.addEventListener('click', async () => {
-      const text = missing.map(s => `${s[0]}\t${s[1]}\t${s[3]} pcs\t${s[4] ? '$' + s[4] : ''}`).join('\n');
+      const text = ['Set\tName\tPieces\tMSRP\tRetired']
+        .concat(missing.map(s => `${s[0]}\t${s[1]}\t${s[3]}\t${s[4] ? '$' + s[4] : ''}\t${s[6] || ''}`))
+        .join('\n');
       try { await navigator.clipboard.writeText(text); toast('Missing list copied', 'good'); }
       catch (e) { toast('Could not copy', 'bad'); }
     });
