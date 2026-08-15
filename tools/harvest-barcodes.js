@@ -48,6 +48,10 @@ const SETS_FILE = path.join(DATA, 'sets.json');
 const BARCODES_FILE = path.join(DATA, 'barcodes.json');
 const PRICES_FILE = path.join(DATA, 'prices.json');
 const DATES_FILE = path.join(DATA, 'dates.json');
+/* Deliberately gitignored: current market value is Brickset's own derived
+   analytics, not a catalogue fact, so it stays on this machine rather than
+   being republished. */
+const VALUES_FILE = path.join(DATA, 'values.json');
 const STATE_FILE = path.join(DATA, 'harvest-state.json');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -125,6 +129,27 @@ function extractDates(flat) {
   return (launched || retired) ? { launched, retired } : null;
 }
 
+/* Current aftermarket value, as "Current value New: ~$1085 Used: ~$531".
+
+   Unlike RRP this is a moving number — one set read $1077 and then $1085 six
+   days later — so every entry is stamped with the date it was read. A value
+   without a date is worse than no value: it looks authoritative and quietly
+   goes wrong. Only retired sets carry one; anything still on sale has none. */
+function extractValues(flat) {
+  const i = flat.search(/Current value/i);
+  if (i < 0) return null;
+  const seg = flat.slice(i + 13, i + 93).split(/Price per piece|Age range|Packaging|Barcodes|RRP|Tags/)[0];
+  const money = re => {
+    const m = seg.match(re);
+    if (!m) return 0;
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  };
+  const isNew = money(/New:\s*~?\$([\d,]+(?:\.\d+)?)/i);
+  const used = money(/Used:\s*~?\$([\d,]+(?:\.\d+)?)/i);
+  return (isNew || used) ? { new: isNew, used } : null;
+}
+
 /* Launch RRP, as "RRP £474.99, $549.99, €549.99".
 
    Two traps on the same page: a second "RRP (inflated)" line giving today's
@@ -167,6 +192,7 @@ function fmtDuration(ms) {
   const barcodes = readJson(BARCODES_FILE, {});
   const prices = readJson(PRICES_FILE, {});
   const dates = readJson(DATES_FILE, {});
+  const values = readJson(VALUES_FILE, {});
   const state = readJson(STATE_FILE, { done: [], stats: { found: 0, none: 0, failed: 0 } });
   const done = new Set(state.done);
   /* Page details (RRP, launch/exit dates) are tracked separately from
@@ -240,6 +266,7 @@ function fmtDuration(ms) {
   console.log(`Barcodes known: ${Object.keys(barcodes).length}`);
   console.log(`Prices known: ${Object.keys(prices).length}`);
   console.log(`Dates known: ${Object.keys(dates).length}`);
+  console.log(`Market values known: ${Object.keys(values).length}`);
   if (!target) { console.log('\nNothing left to harvest.'); return; }
   console.log(`Estimated time at ${MIN_DELAY / 1000}s/set: ${fmtDuration(target * MIN_DELAY)}`);
   if (DRY_RUN) { console.log('\n--dry-run: queue sized, nothing fetched.'); return; }
@@ -251,7 +278,8 @@ function fmtDuration(ms) {
   const started = Date.now();
   /* state.stats is a lifetime tally across every run ever; these are scoped to
      this run, which is what you actually want to read at the end of one. */
-  const run = { found: 0, none: 0, failed: 0, filled: 0, priced: 0, dated: 0 };
+  const run = { found: 0, none: 0, failed: 0, filled: 0, priced: 0, dated: 0, valued: 0 };
+  const today = new Date().toISOString().slice(0, 10);
 
   const save = () => {
     state.done = [...done];
@@ -260,6 +288,7 @@ function fmtDuration(ms) {
     fs.writeFileSync(BARCODES_FILE, JSON.stringify(barcodes));
     fs.writeFileSync(PRICES_FILE, JSON.stringify(prices));
     fs.writeFileSync(DATES_FILE, JSON.stringify(dates));
+    fs.writeFileSync(VALUES_FILE, JSON.stringify(values));
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
   };
 
@@ -313,6 +342,9 @@ function fmtDuration(ms) {
 
       /* Launch/exit dates come off the same page. The exit date is what the
          app reports as the retirement date. */
+      const worth = extractValues(flat);
+      if (worth) { values[setNum] = [worth.new, worth.used, today]; run.valued++; }
+
       const when = extractDates(flat);
       if (when) { dates[setNum] = [when.launched, when.retired]; if (when.retired) run.dated++; }
 
@@ -375,7 +407,10 @@ function fmtDuration(ms) {
   console.log(`Barcodes in table: ${Object.keys(barcodes).length}`);
   console.log(`Coverage: ${covered}/${done.size} checked sets have a barcode` +
     (done.size ? ` (${((covered / done.size) * 100).toFixed(1)}%)` : ''));
-  const remaining = Object.keys(sets).length - done.size;
+  /* Can go negative: the resume list keeps sets that Rebrickable has since
+     delisted, so "done" can exceed the current catalogue. Nothing is wrong,
+     but a negative count reads like a bug. */
+  const remaining = Math.max(0, Object.keys(sets).length - done.size);
   console.log(`Remaining unchecked: ${remaining}`);
   if (remaining) console.log('Rerun the same command to continue.');
   else if (!RECHECK) {

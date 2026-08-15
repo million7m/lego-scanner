@@ -21,3 +21,9 @@ tmp_*
 # in CI is not enough: GitHub evicts caches after 7 days unused and the refresh
 # runs weekly, so a miss would restart the whole 19h crawl.
 data/cache/
+
+# Current market values stay on the harvesting machine. Barcodes, RRP and
+# retirement dates are catalogue facts; aftermarket valuations are Brickset's
+# own derived analytics, so they are not republished here. The app reads
+# values.json when present and works fine without it.
+data/values.json

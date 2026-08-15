@@ -52,7 +52,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 const CONTRIB_FILE = path.join(DATA_DIR, 'contributed.json');
 const IMG_PREFIX = 'https://cdn.rebrickable.com/media/sets/';
 
-const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map(), prices: new Map(), dates: new Map() };
+const DB = { barcodes: new Map(), sets: new Map(), contributed: new Map(), prices: new Map(), dates: new Map(), values: new Map() };
 
 function loadJsonFile(name) {
   try {
@@ -69,14 +69,18 @@ function loadDb() {
   const contributed = loadJsonFile('contributed.json') || {};
   const prices = loadJsonFile('prices.json') || {};
   const dates = loadJsonFile('dates.json') || {};
+  /* Optional and gitignored — absent on the deployed service unless the
+     harvesting machine supplies it. Everything degrades to MSRP without it. */
+  const values = loadJsonFile('values.json') || {};
   DB.barcodes = new Map(Object.entries(barcodes));
   DB.sets = new Map(Object.entries(sets));
   DB.contributed = new Map(Object.entries(contributed));
   DB.prices = new Map(Object.entries(prices));
   DB.dates = new Map(Object.entries(dates));
+  DB.values = new Map(Object.entries(values));
   FACETS = null;                                  // rebuilt lazily from the new data
   console.log(`Local DB: ${DB.barcodes.size} harvested barcodes, ${DB.sets.size} sets, ` +
-    `${DB.prices.size} prices, ${DB.dates.size} dates, ${DB.contributed.size} contributed`);
+    `${DB.prices.size} prices, ${DB.dates.size} dates, ${DB.values.size} market values, ${DB.contributed.size} contributed`);
   if (!DB.barcodes.size) {
     console.warn('  No barcodes.json yet — run tools/build-sets.js then tools/harvest-barcodes.js');
   }
@@ -149,6 +153,19 @@ function availabilityFor(setNum) {
   return out;
 }
 
+/* Aftermarket value plus the date it was read. The date is returned with it
+   so a stale figure can be shown as stale rather than passed off as current. */
+function marketFor(setNum) {
+  const row = DB.values.get(setNum);
+  if (!row) return {};
+  const [mNew, mUsed, asOf] = row;
+  const out = {};
+  if (mNew) out.marketNew = mNew;
+  if (mUsed) out.marketUsed = mUsed;
+  if (asOf) out.marketAsOf = asOf;
+  return out;
+}
+
 function setDetails(setNum) {
   const row = DB.sets.get(setNum);
   if (!row) return { setNum };
@@ -166,6 +183,7 @@ function setDetails(setNum) {
     imgUrl: img || IMG_PREFIX + setNum.toLowerCase() + '.jpg',
     ...msrpFor(setNum),
     ...availabilityFor(setNum),
+    ...marketFor(setNum),
   };
 }
 
@@ -657,6 +675,7 @@ const server = http.createServer(async (req, res) => {
         sets: DB.sets.size,
         prices: DB.prices.size,
         dates: DB.dates.size,
+        marketValues: DB.values.size,
       },
       env: {
         BRICKOWL_KEY: !!process.env.BRICKOWL_KEY,

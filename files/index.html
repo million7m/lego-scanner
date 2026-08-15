@@ -709,9 +709,13 @@ function priceNum(p) { return Number.parseFloat(String(p ?? '').replace(/[^0-9.]
    the set's MSRP rather than counting it as nothing: an unpriced set is not a
    worthless one, and treating it as zero understated the whole ledger. */
 function effectiveValue(x) {
-  return priceNum(x.price) || Number(x.msrp) || 0;
+  /* Market value outranks MSRP: for a retired set the launch price stopped
+     describing what it's worth years ago. A figure you typed still wins over
+     both — that's your judgement about your copy. */
+  return priceNum(x.price) || Number(x.marketNew) || Number(x.msrp) || 0;
 }
-const isEstimatedValue = x => !priceNum(x.price) && Number(x.msrp) > 0;
+const isEstimatedValue = x => !priceNum(x.price) && (Number(x.marketNew) > 0 || Number(x.msrp) > 0);
+const valueSource = x => priceNum(x.price) ? 'yours' : Number(x.marketNew) ? 'market' : Number(x.msrp) ? 'msrp' : '';
 
 function computeStats() {
   const totalPieces = items.reduce((a, x) => a + (x.qty || 0), 0);
@@ -845,7 +849,8 @@ function render() {
           ${x.setNum ? `<span class="tag set">#${esc(x.setNum)}</span>` : ''}
           ${x.theme ? `<span class="tag">${esc(x.theme)}</span>` : ''}
           ${x.numParts ? `<span class="tag">${x.numParts} pcs</span>` : ''}
-          ${x.msrp ? `<span class="tag" title="${isEstimatedValue(x) ? 'Counted as this item’s value — no value entered' : 'Original retail price'}"${isEstimatedValue(x) ? ' style="color:#bfe6cb; border-color:rgba(95,184,120,.3)"' : ''}>MSRP $${esc(String(x.msrp))}</span>` : ''}
+          ${x.marketNew ? `<span class="tag" title="Aftermarket value${x.marketAsOf ? ', read ' + esc(x.marketAsOf) : ''}"${valueSource(x) === 'market' ? ' style="color:#bfe6cb; border-color:rgba(95,184,120,.3)"' : ''}>Market $${esc(String(x.marketNew))}</span>` : ''}
+          ${x.msrp ? `<span class="tag" title="Original retail price"${valueSource(x) === 'msrp' ? ' style="color:#bfe6cb; border-color:rgba(95,184,120,.3)"' : ''}>MSRP $${esc(String(x.msrp))}</span>` : ''}
           ${x.boxId ? `<span class="tag">box:${esc(x.boxId)}</span>` : ''}
           ${x.price ? `<span class="tag" style="color:#bfe6cb; border-color:rgba(95,184,120,.3)">${esc(String(x.price))}</span>` : ''}
           ${x.unresolved ? `<span class="tag" style="color:var(--gold-soft); border-color:rgba(242,184,56,.3)">Unresolved</span>` : ''}
@@ -919,6 +924,8 @@ function openEditor(item, resolvedNote) {
   $('#editSheet').dataset.img = item?.imgUrl || '';
   $('#editSheet').dataset.parts = item?.numParts || '';
   $('#editSheet').dataset.msrp = item?.msrp || '';
+  $('#editSheet').dataset.marketnew = item?.marketNew || '';
+  $('#editSheet').dataset.marketasof = item?.marketAsOf || '';
   // cleared per item, or an alias from the previously edited row leaks into this one
   $('#editSheet').dataset.alt = '';
   showMsrpHint();
@@ -948,6 +955,8 @@ async function save() {
     imgUrl: $('#editSheet').dataset.img || it.imgUrl || '',
     numParts: +($('#editSheet').dataset.parts) || it.numParts || 0,
     msrp: +($('#editSheet').dataset.msrp) || it.msrp || 0,
+    marketNew: +($('#editSheet').dataset.marketnew) || it.marketNew || 0,
+    marketAsOf: $('#editSheet').dataset.marketasof || it.marketAsOf || '',
     unresolved: $('#fUnresolved').checked,
     /* The box comes from the field, never from the global active box. The
        active box only ever seeds it for a NEW item (see openEditor) — it used
@@ -1161,7 +1170,9 @@ async function resolveBarcode(code) {
     if (found.note && !$('#fNote').value) $('#fNote').value = found.note;
     if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
     if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
-    if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; showMsrpHint(); }
+    if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; }
+    if (found.marketNew) { $('#editSheet').dataset.marketnew = found.marketNew; $('#editSheet').dataset.marketasof = found.marketAsOf || ''; }
+    if (found.msrp || found.marketNew) showMsrpHint();
     /* The lookup resolved through a different code than the one scanned, which
        means the scanned symbol wasn't the product's real identifier. Store the
        GTIN as the barcode and keep the scanned one as an alias so rescanning
@@ -1355,7 +1366,9 @@ $('#btnIdentify').addEventListener('click', async () => {
     put('#fTheme', found.theme, 'theme');
     if (found.numParts) $('#editSheet').dataset.parts = found.numParts;
     if (found.imgUrl) $('#editSheet').dataset.img = found.imgUrl;
-    if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; showMsrpHint(); }
+    if (found.msrp) { $('#editSheet').dataset.msrp = found.msrp; }
+    if (found.marketNew) { $('#editSheet').dataset.marketnew = found.marketNew; $('#editSheet').dataset.marketasof = found.marketAsOf || ''; }
+    if (found.msrp || found.marketNew) showMsrpHint();
     /* The lookup resolved through a different code than the one scanned, which
        means the scanned symbol wasn't the product's real identifier. Store the
        GTIN as the barcode and keep the scanned one as an alias so rescanning
@@ -1448,14 +1461,19 @@ function setImageUrl(setNum) {
    so it's shown next to "Value each" rather than written into it, with a tap
    to copy it across if that's what you want the item valued at. */
 function showMsrpHint() {
-  const m = $('#editSheet').dataset.msrp;
+  const ds = $('#editSheet').dataset;
   const el = $('#msrpHint');
-  if (!m) { el.innerHTML = ''; return; }
-  el.innerHTML = `MSRP $${esc(String(m))} · <a href="#" id="useMsrp" style="color:var(--gold-soft)">use this</a>`;
-  $('#useMsrp').addEventListener('click', e => {
+  const parts = [];
+  if (ds.marketnew) {
+    const age = ds.marketasof ? ` as of ${esc(ds.marketasof)}` : '';
+    parts.push(`Market $${esc(String(ds.marketnew))}${age} · <a href="#" data-use="${esc(String(ds.marketnew))}" style="color:var(--gold-soft)">use</a>`);
+  }
+  if (ds.msrp) parts.push(`MSRP $${esc(String(ds.msrp))} · <a href="#" data-use="${esc(String(ds.msrp))}" style="color:var(--gold-soft)">use</a>`);
+  el.innerHTML = parts.join('<br>');
+  el.querySelectorAll('[data-use]').forEach(a => a.addEventListener('click', e => {
     e.preventDefault();
-    $('#fPrice').value = m;
-  });
+    $('#fPrice').value = a.dataset.use;
+  }));
 }
 
 function applyLookup(name, theme, parts, img) {
