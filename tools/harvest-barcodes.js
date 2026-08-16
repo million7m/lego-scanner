@@ -171,6 +171,28 @@ function extractPrices(flat) {
   return (usd || gbp || eur) ? { usd, gbp, eur } : null;
 }
 
+/* One barcode can legitimately appear on several set pages — multipacks and
+   blind-bag series share a box code, and Brickset lists it against each member
+   (7268-1 Crab and 7270-1 Bird; 8550-1 and 8554-1 Bionicle Va figures).
+
+   Assigning unconditionally made it last-writer-wins, so every recheck run
+   reshuffled those mappings and the table never settled. Resolve it the same
+   way the data merge does, and independently of visit order: keep the lowest
+   variant of a shared base set, otherwise the lowest set number. Reruns then
+   converge instead of oscillating. */
+function claimBarcode(barcodes, code, setNum) {
+  const held = barcodes[code];
+  if (!held) { barcodes[code] = setNum; return; }
+  if (held === setNum) return;
+  const base = s => String(s).replace(/-\d+$/, '');
+  const variant = s => Number((String(s).match(/-(\d+)$/) || [])[1] || 0);
+  if (base(held) === base(setNum)) {
+    if (variant(setNum) < variant(held)) barcodes[code] = setNum;
+  } else if (String(setNum).localeCompare(String(held), undefined, { numeric: true }) < 0) {
+    barcodes[code] = setNum;
+  }
+}
+
 function fmtDuration(ms) {
   const s = Math.round(ms / 1000);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
@@ -352,8 +374,8 @@ function fmtDuration(ms) {
 
       const { ean, upc } = extractBarcodes(flat);
       const wasBlank = !setsWithBarcode.has(setNum);
-      if (ean) barcodes[ean] = setNum;
-      if (upc) barcodes[upc] = setNum;
+      if (ean) claimBarcode(barcodes, ean, setNum);
+      if (upc) claimBarcode(barcodes, upc, setNum);
       if (ean || upc) {
         state.stats.found++;
         run.found++;
