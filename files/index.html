@@ -442,6 +442,10 @@
     <div class="field">
       <label><input id="fUnresolved" type="checkbox" /> Mark as unresolved — couldn’t identify this barcode yet</label>
     </div>
+    <div id="dealsOut"></div>
+    <button class="btn ghost small" id="btnDeals" style="margin-bottom:8px">
+      Check retailer prices
+    </button>
     <button class="btn ghost small" id="btnIdentify" style="margin-bottom:8px">
       Identify from barcode
     </button>
@@ -928,6 +932,8 @@ function openEditor(item, resolvedNote) {
   $('#editSheet').dataset.marketasof = item?.marketAsOf || '';
   // cleared per item, or an alias from the previously edited row leaks into this one
   $('#editSheet').dataset.alt = '';
+  // likewise: prices fetched for the last item must not appear under this one
+  $('#dealsOut').innerHTML = '';
   showMsrpHint();
   $('#fUnresolved').checked = item?.unresolved || false;
   openSheet($('#editSheet'));
@@ -1336,6 +1342,51 @@ async function lookupGenericBarcode(code) {
    Only ever fills blanks. An exact database hit that disagrees with something
    you already typed is reported rather than applied, so nothing you entered by
    hand is silently overwritten. */
+/* Live retailer prices, on demand only. Deliberately not fired on scan: the
+   scanner is a local hash lookup and must stay instant and offline-capable,
+   and outbound API usage should track deliberate taps rather than traffic. */
+$('#btnDeals').addEventListener('click', async () => {
+  const code = $('#fBarcode').value.trim();
+  if (!code) { toast('No barcode on this item to price', 'bad'); return; }
+  if (!navigator.onLine) { toast('You’re offline — prices need a connection', 'bad'); return; }
+
+  const btn = $('#btnDeals'); const orig = btn.textContent;
+  btn.textContent = 'Checking…'; btn.disabled = true;
+  try {
+    const d = await (await fetch('api/deals?code=' + encodeURIComponent(code))).json();
+
+    if (!d.configured?.length) {
+      $('#dealsOut').innerHTML = `<div class="resolved warn">＋ No retailer is configured. Add a BESTBUY_KEY on the server to enable price checks.</div>`;
+      return;
+    }
+    if (!d.offers?.length) {
+      $('#dealsOut').innerHTML = `<div class="resolved warn">＋ ${esc(d.configured.join(', '))} ${d.configured.length === 1 ? 'has' : 'have'} no listing for this barcode.</div>`;
+      return;
+    }
+
+    const when = d.checkedAt ? new Date(d.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+    $('#dealsOut').innerHTML = `<div class="set-group" style="margin-bottom:10px">` + d.offers.map(o => {
+      if (o.error) return `<div class="set-row"><div class="t"><b>${esc(o.retailer)}</b><small>couldn’t check — ${esc(o.error)}</small></div></div>`;
+      const price = o.price != null ? `$${o.price}` : 'no price';
+      /* Show the original alongside a sale price: "$129.99" alone is not a
+         deal, "$129.99 was $159.99" is. */
+      const was = o.wasPrice ? ` <span style="color:var(--faint); text-decoration:line-through">$${o.wasPrice}</span>` : '';
+      const stock = o.online === false ? ' · online: out of stock' : '';
+      return `<div class="set-row">
+        <div class="t">
+          <b>${esc(o.retailer)} — ${price}${was}${o.onSale ? ' <span style="color:#bfe6cb">on sale</span>' : ''}</b>
+          <small>${esc(o.name || '')}${stock}${when ? ` · checked ${when}` : ''}</small>
+        </div>
+        ${o.url ? `<a class="go" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">›</a>` : ''}
+      </div>`;
+    }).join('') + `</div>`;
+  } catch (e) {
+    toast('Price check failed', 'bad');
+  } finally {
+    btn.textContent = orig; btn.disabled = false;
+  }
+});
+
 $('#btnIdentify').addEventListener('click', async () => {
   const code = $('#fBarcode').value.trim();
   if (!code) { toast('No barcode on this item to identify', 'bad'); return; }

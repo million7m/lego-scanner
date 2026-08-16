@@ -298,6 +298,91 @@ function cleanSetName(name) {
   return String(name || '').replace(/^lego\s+/i, '').replace(/\s+\d{3,7}\s*$/, '').trim();
 }
 
+/* ============================================================
+   Retailer price lookup.
+
+   Unlike everything else here, retail prices can't be pre-harvested — they
+   move hourly, so this is a live call. That's why it sits behind an explicit
+   "check prices" action rather than firing on every scan: the scanner stays a
+   local hash lookup, and outbound API usage is bounded by deliberate taps
+   instead of scaling with traffic.
+
+   Providers are pluggable. One is implemented; the others were probed and
+   aren't available on open terms:
+     Best Buy — free key, documented, implemented below
+     Walmart  — API exists but needs an approved account and signed requests
+     Target   — public product endpoint returns 410; partner-only now
+     Amazon   — PA-API needs an Associates account with qualifying sales first
+     Macy's   — no API at all
+   ============================================================ */
+const DEAL_TTL_MS = 30 * 60 * 1000;      // prices move, but not second to second
+const dealCache = new Map();
+
+const RETAILERS = [
+  {
+    id: 'bestbuy',
+    name: 'Best Buy',
+    key: () => process.env.BESTBUY_KEY || '',
+    async lookup(upc, key) {
+      const show = 'sku,name,salePrice,regularPrice,onSale,url,onlineAvailability,inStoreAvailability';
+      const url = `https://api.bestbuy.com/v1/products(upc=${encodeURIComponent(upc)})` +
+        `?apiKey=${encodeURIComponent(key)}&format=json&show=${show}&pageSize=1`;
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!r.ok) {
+        // 403 here is usually a bad key or the per-second cap, not "no product"
+        console.error(`Best Buy HTTP ${r.status} for ${upc}`);
+        return { error: r.status === 403 ? 'key rejected or rate limited' : `HTTP ${r.status}` };
+      }
+      const d = await r.json();
+      const p = (d.products || [])[0];
+      if (!p) return null;
+      return {
+        name: p.name || '',
+        price: p.salePrice ?? null,
+        wasPrice: p.onSale ? p.regularPrice ?? null : null,
+        onSale: !!p.onSale,
+        online: p.onlineAvailability ?? null,
+        inStore: p.inStoreAvailability ?? null,
+        url: p.url || '',
+      };
+    },
+  },
+];
+
+const configuredRetailers = () => RETAILERS.filter(r => r.key());
+
+/* Every code an item might be catalogued under — retailers index on the UPC-A
+   form far more often than the EAN-13, so trying both materially changes the
+   hit rate. */
+async function findDeals(code) {
+  const cached = dealCache.get(code);
+  if (cached && Date.now() - cached.at < DEAL_TTL_MS) return cached.payload;
+
+  const providers = configuredRetailers();
+  const offers = [];
+  for (const r of providers) {
+    let hit = null;
+    for (const v of codeVariants(code)) {
+      try {
+        hit = await r.lookup(v, r.key());
+      } catch (e) {
+        console.error(`${r.id} lookup failed:`, e.message);
+        hit = { error: 'lookup failed' };
+      }
+      if (hit) break;
+    }
+    if (hit) offers.push({ retailer: r.name, id: r.id, ...hit });
+  }
+
+  const payload = {
+    configured: providers.map(r => r.name),
+    checkedAt: new Date().toISOString(),
+    offers,
+  };
+  dealCache.set(code, { at: Date.now(), payload });
+  return payload;
+}
+
 /* --- the identify chain, ported from the old Android app --- */
 async function lookupBarcodeLookup(code, key) {
   if (!key) return null;
@@ -580,6 +665,28 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ result, debug: { boKey: !!keys.bo, rbKey: !!keys.rb, blKey: !!keys.bl } }));
   }
 
+  /* Live retailer prices for one barcode. Deliberately not part of
+     /api/identify — scanning must stay instant and offline-capable. */
+  if (u.pathname === '/api/deals') {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const code = (u.searchParams.get('code') || '').trim();
+    if (!code) { res.writeHead(400); return res.end('{"error":"missing code"}'); }
+    if (!configuredRetailers().length) {
+      res.writeHead(200);
+      return res.end(JSON.stringify({ configured: [], offers: [], reason: 'no retailer API key set' }));
+    }
+    try {
+      const payload = await findDeals(code);
+      res.writeHead(200);
+      return res.end(JSON.stringify(payload));
+    } catch (e) {
+      console.error('deals error:', e.message);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ configured: configuredRetailers().map(r => r.name), offers: [], error: 'lookup failed' }));
+    }
+  }
+
   /* Year and theme pickers for the completion report. Computed from the same
      filtered catalogue the report uses, so every option returns results. */
   if (u.pathname === '/api/facets') {
@@ -676,6 +783,10 @@ const server = http.createServer(async (req, res) => {
         prices: DB.prices.size,
         dates: DB.dates.size,
         marketValues: DB.values.size,
+      },
+      retailers: {
+        configured: configuredRetailers().map(r => r.name),
+        available: RETAILERS.map(r => r.name),
       },
       env: {
         BRICKOWL_KEY: !!process.env.BRICKOWL_KEY,
